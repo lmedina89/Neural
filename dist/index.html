@@ -14,7 +14,7 @@
         <div class="eyebrow">MICROMIND • LEARNING LABORATORY</div>
         <h1>Watch a tiny brain actually learn.</h1>
       </div>
-      <div class="build" id="buildTag">v0.1.2 • AUTOCONT-012</div>
+      <div class="build" id="buildTag">v0.1.2.1 • CHAMPEFF-0121</div>
     </header>
 
     <section class="controls" aria-label="Main controls">
@@ -27,6 +27,7 @@
         <select id="budgetSelect">
           <option value="eco">Eco</option>
           <option value="balanced" selected>Balanced</option>
+          <option value="adaptive">Adaptive</option>
           <option value="max">Max</option>
         </select>
       </label>
@@ -38,6 +39,7 @@
           <option id="foragerOption" value="forager" disabled>Champion Forager</option>
           <option id="survivorOption" value="survivor" disabled>Champion Survivor</option>
           <option id="efficiencyOption" value="efficiency" disabled>Champion Efficiency</option>
+          <optgroup id="hallBrainOptions" label="Hall of Fame"></optgroup>
         </select>
       </label>
       <button id="saveBtn" title="Save the current session to the protected Manual Save slot. A higher-step manual save will not be overwritten by a lower-step brain.">Save Manual</button>
@@ -45,11 +47,29 @@
       <button id="loadAutosaveBtn" title="Load the automatic validation autosave explicitly. Loading pauses training so you can verify it before resuming.">Load Autosave</button>
       <button id="testBtn" title="Run the final held-out all-skills diagnostic. It never updates weights, archives, curriculum, or rollback state.">Unseen Test</button>
       <button id="compareBtn" title="Compare historical brains on a separate held-out comparison domain, preserving the final Unseen Test domain.">Compare Brains</button>
-      <button id="restoreBestBtn" title="Explicitly fork the Learner from the selected frozen Champion. This never happens automatically." disabled>Fork From Champion</button>
+      <button id="pinChampionBtn" title="Permanently pin the selected Champion into the separate Hall of Fame archive. Hall entries are never replaced by later Champions." disabled>Pin Champion</button>
+      <button id="restoreBestBtn" title="Explicitly create a new Learner lineage from the selected frozen Champion or Hall-of-Fame brain. The current Learner is frozen first and is not destroyed." disabled>Fork New Learner</button>
+      <label class="selectLabel" title="Frozen learner branches are preserved when you fork or switch lineages. Only one lineage trains at a time.">Learner Branch
+        <select id="branchSelect"><option value="active">Active Learner</option></select>
+      </label>
+      <button id="switchBranchBtn" title="Freeze the current Learner and resume the selected stored lineage. Global experience age stays monotonic." disabled>Switch Branch</button>
     </section>
     <section class="saveSlotsPanel" aria-label="Stored checkpoint slots">
       <div><b>MANUAL SAVE</b><span id="manualSlotInfo">Checking browser storage…</span></div>
       <div><b>VALIDATION AUTOSAVE</b><span id="autosaveSlotInfo">Checking browser storage…</span></div>
+    </section>
+
+    <section class="researchStatusPanel panel" aria-label="Research status">
+      <div class="panelHead"><strong>RESEARCH STATUS</strong><span>policy preservation + lineage</span></div>
+      <div class="researchGrid">
+        <div><span>experience age</span><b id="experienceAgeVal">0</b></div>
+        <div><span>learner lineage</span><b id="researchLineageVal">—</b></div>
+        <div><span>policy origin</span><b id="policyOriginVal">native</b></div>
+        <div><span>active Champion</span><b id="activeChampionVal">—</b></div>
+        <div><span>Hall of Fame</span><b id="hallVal">empty</b></div>
+        <div><span>frozen branches</span><b id="branchesVal">0</b></div>
+      </div>
+      <div id="hallList" class="hallList">No pinned historic brains yet.</div>
     </section>
 
     <details class="helpPanel">
@@ -59,13 +79,15 @@
         <div><b>Learn</b><span>Runs guarded PPO on the autonomous Learner. Earlier skills are continuously rehearsed alongside the current curriculum.</span></div>
         <div><b>Observe</b><span>Stops learning and watches the selected Learner/Champion brain act at human speed.</span></div>
         <div><b>Probe</b><span>Freezes action. Move food/hazard/agent and inspect real policy changes.</span></div>
-        <div><b>Compute</b><span>Eco reduces heat; Balanced is default; Max favors throughput.</span></div>
-        <div><b>View Brain</b><span>Learner changes continuously. Frozen Champions preserve repeatedly validated Balanced, Overall-return, Forager, Survivor, and Efficiency policies.</span></div>
+        <div><b>Compute</b><span>Eco reduces heat; Balanced is default; Adaptive changes only idle delay based on browser responsiveness; Max favors throughput. Learning math is unchanged.</span></div>
+        <div><b>View Brain</b><span>Learner changes continuously. Frozen Champions and Hall-of-Fame brains can be inspected in Observe/Probe without being modified.</span></div>
         <div><b>Save Manual</b><span>Saves the current run to the manual slot. Recovery protection refuses to overwrite a manual brain with a lower-step brain.</span></div>
         <div><b>Load Manual / Autosave</b><span>Each stored slot is shown separately with its step count and timestamp. Loading pauses training for verification.</span></div>
         <div><b>Unseen Test</b><span>Final all-skills holdout. Diagnostic only: it never selects archives or triggers rollback. Use sparingly so human decisions do not overfit it.</span></div>
         <div><b>Compare Brains</b><span>Replays historical brains on a separate comparison-only holdout, not the final Unseen Test domain.</span></div>
-        <div><b>Fork From Champion</b><span>Optional manual experiment: start a new Learner lineage from a frozen Champion brain + optimizer. Experience age stays monotonic. Validation never does this automatically.</span></div>
+        <div><b>Pin Champion</b><span>Copies a Champion into the permanent Hall of Fame. The Hall uses its own browser-storage record as well as checkpoint backup.</span></div>
+        <div><b>Fork New Learner</b><span>Manual experiment only: freezes the active Learner, starts a new lineage from a Champion/Hall brain, and keeps the old lineage available to switch back to.</span></div>
+        <div><b>Switch Branch</b><span>Freeze the current lineage and resume another stored Learner lineage. Only one branch trains at a time to avoid wasting phone compute.</span></div>
         <div><b>Return</b><span>Recent average total reward. Higher is better, but reinforcement learning is noisy.</span></div>
         <div><b>Food</b><span>Recent average resources collected per episode.</span></div>
         <div><b>Entropy</b><span>Policy uncertainty/exploration. High means action probabilities are more spread out.</span></div>
@@ -130,6 +152,14 @@
           <span>rehearsal mix <b id="rehearsalVal">—</b></span>
           <span>champion challenge <b id="promotionVal">—</b></span>
         </div>
+        <div class="validationStrip performanceStrip">
+          <span>simulation <b id="simSpeedVal">—</b></span>
+          <span>PPO <b id="ppoMsVal">—</b></span>
+          <span>browser FPS <b id="fpsVal">—</b></span>
+          <span>UI <b id="uiMsVal">—</b></span>
+          <span>validation <b id="validationMsVal">—</b></span>
+          <span>storage <b id="storageMsVal">—</b></span>
+        </div>
       </article>
 
       <article class="panel decisionPanel">
@@ -152,7 +182,7 @@
       <div id="resultsText" class="resultsText">No evaluation run yet.</div>
     </section>
 
-    <footer>MicroMind v0.1.2 uses an autonomous recurrent PPO Learner with continual rehearsal and frozen repeat-confirmed Champions. Validation observes/promotes; final holdout only diagnoses.</footer>
+    <footer>MicroMind v0.1.2.1 preserves historic Champions and learner branches while optimizing the same autonomous continual-learning system. Learning math and evaluation protocols remain unchanged.</footer>
   </main>
   <script type="module" src="./src/app/main.js"></script>
 </body>

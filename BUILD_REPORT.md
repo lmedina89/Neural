@@ -1,42 +1,65 @@
-# MicroMind v0.1.2 — Build Report
+# MicroMind v0.1.2.1 — Build Report
 
-**Build marker:** `AUTOCONT-012`  
-**Baseline:** exact v0.1.1.1 `VALCAL-0111` package  
-**Save schema:** 5 (loads schemas 1–5)
+**Build marker:** `CHAMPEFF-0121`  
+**Baseline:** exact v0.1.2 `AUTOCONT-012` package  
+**Baseline SHA-256:** `15cb2a0fc94302e0e1df7f2a1ecc372afef9831afcb34c1b6627df58138a5913`  
+**Save schema:** 6 (loads schemas 1–6)
 
-## Scope
-v0.1.2 changes the training philosophy from behavioral rollback to autonomous continual learning. The 1,040-parameter recurrent actor-critic is unchanged.
+## Scope containment
+This is an infrastructure/performance milestone. The following are intentionally unchanged from v0.1.2:
+- 1,040-parameter recurrent actor-critic architecture;
+- observations/actions;
+- rewards;
+- PPO hyperparameters and learning objectives;
+- curriculum definitions and rehearsal target ratios;
+- validation/Champion promotion protocol;
+- comparison/final-heldout protocols;
+- physics and procedural world rules.
 
-### Implemented
-- **Learner / Champion separation:** the active Learner is never automatically replaced for behavioral regression. Frozen Champions preserve repeatedly validated policies.
-- **Continual rehearsal:** training episodes are interleaved across previously learned skills. Target mixes by current curriculum stage are 100/0/0/0, 25/75/0/0, 15/20/65/0, and 10/15/20/55 percent for Motor/Foraging/Obstacle/Scarcity.
-- **Repeat-confirmed Champion promotion:** after an initial Champion exists, a challenger must beat it on two consecutive validation checks before promotion.
-- **Observational retention:** forgetting/regression remains visible and can schedule an earlier re-check, but does not restore weights or alter the Learner.
-- **Numerical safety retained:** PPO hard-KL rejection still restores a mathematically destructive update; this is optimizer safety, not behavioral selection.
-- **Lineage tracking:** Champion snapshots record Learner lineage. Manual `Fork From Champion` creates a new explicit lineage; it is never automatic.
-- **UI diagnostics:** Learner lineage, observed rehearsal mix and pending Champion challenges are visible.
-- Final holdout remains diagnostic-only and separate from training/validation.
+## Implemented
+- Permanent, fingerprint-deduplicated **Hall of Fame** with dedicated IndexedDB persistence plus schema-6 checkpoint backup.
+- Schema-5 migration bootstrap: when no Hall exists, the preserved Balanced Champion is pinned as the migration baseline.
+- Hall brains are inspectable in Observe/Probe and usable as explicit manual fork sources.
+- Safe learner branching: forking freezes the current Learner; switching branches freezes the lineage being left. Only one lineage trains at once.
+- Global experiment age remains monotonic; branch-local experience is tracked separately.
+- Research Status UI exposes experiment age, active lineage, policy origin, active Champion, Hall count/list, and frozen branches.
+- Performance instrumentation for simulation throughput, PPO time, browser FPS, UI time, validation time, and storage time.
+- Adaptive compute profile changes only idle duty cycle, not PPO rollout size/hyperparameters.
+- Training hot-path optimization: capture-free model forward/action, reduced visualization-only allocations, reusable PPO gradient buffers, one-per-update Adam bias correction, direct ray-observation calculation, throttled DOM/Canvas updates, cached control DOM.
+- PPO and action RNG state are now checkpointed for stronger reproducible continuation.
+
+## Behavior-preservation evidence
+Side-by-side deterministic differential against exact v0.1.2 for 14,400 transitions with identical seed/stage/workload:
+- **0 differing model parameter elements**
+- **maximum parameter difference 0**
+- identical steps, episodes, curriculum, mean return, mean food, action RNG, and PPO RNG state.
+
+## Performance A/B
+Controlled headless Node workload, five independent process runs per version:
+- v0.1.2 median: **27,485 steps/sec**
+- v0.1.2.1 median: **48,957 steps/sec**
+- improvement: **~78%**
+
+This benchmark is development-machine evidence only; physical iPhone Safari remains the acceptance authority for mobile throughput/thermal behavior.
 
 ## Automated QA
-- `npm test`: **40/40 PASS**
-- JS/MJS syntax checks: PASS
-- Static production build: PASS
-- Clean-unzip test/build: PASS
-- Static HTTP resource smoke: PASS
-- ZIP integrity: PASS
-
-## Controlled benchmark
-120,064 experience steps, hardest-stage training with continual rehearsal enabled.
-- Initial all-skills score: **0.5%**
-- Learner at end: **33.4%**
-- Repeat-confirmed Balanced Champion @ 100,096: **34.0%** on the benchmark suite
-- Observed rehearsal mix over final 160 episodes: **9.4% / 15.0% / 18.8% / 56.9%**, close to the 10/15/20/55 target.
-- Behavioral automatic rollbacks: **0**
+- `npm test`: **50/50 PASS**
+- Hall immutability/dedup: PASS
+- Hall fork / learner branch switch: PASS
+- schema-6 roundtrip: PASS
+- schemas 1–5 migration coverage retained: PASS
+- capture-free policy equivalence: PASS
+- profiler finite/validation-separated: PASS
+- optimizer/action RNG persistence: PASS
+- recovery-safe Manual/Autosave protections retained: PASS
+- final heldout remains diagnostic-only: PASS
 
 ## Physical iPhone gate
-Load the existing v0.1.1.1 Manual Save, confirm the multi-million-step Learner and Champions survive schema-5 migration, then Resume. Verify:
-1. no automatic behavioral rollback during a regression;
-2. `rehearsal mix` includes earlier skills as curriculum advances;
-3. a superior Learner shows `Champion challenge 1/2` before promotion;
-4. only a second qualifying validation promotes it;
-5. final Unseen Test does not change Learner/Champion state.
+1. On v0.1.2, press **Save Manual** before deployment.
+2. Deploy v0.1.2.1 and verify `v0.1.2.1 • CHAMPEFF-0121`.
+3. Confirm the old Manual Save still shows the multi-million-step run; press **Load Manual**.
+4. If the persistent Hall was previously empty, verify **HOF-001** appears from the loaded Balanced Champion (expected physical run: ~4,800,240 steps).
+5. Verify active Learner lineage/step count and existing Champions remain intact.
+6. Press **Save Manual** once after migration so schema 6 backs up Hall/branches.
+7. Resume on Balanced or Adaptive and compare sustained physical steps/sec / responsiveness with v0.1.2.
+8. Do not fork during the initial acceptance test; first validate preservation and performance.

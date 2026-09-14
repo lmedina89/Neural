@@ -1,5 +1,5 @@
-export const VERSION = '0.1.2';
-export const BUILD_MARKER = 'AUTOCONT-012';
+export const VERSION = '0.1.2.1';
+export const BUILD_MARKER = 'CHAMPEFF-0121';
 
 export const CONFIG = Object.freeze({
   world: {
@@ -122,6 +122,10 @@ export const CONFIG = Object.freeze({
     evalEpisodes: 32,
     compareEpisodes: 24,
     chartPoints: 240,
+    learnRenderHz: 12,
+    observeRenderHz: 30,
+    probeRenderHz: 20,
+    learnUiHz: 5,
   },
 });
 

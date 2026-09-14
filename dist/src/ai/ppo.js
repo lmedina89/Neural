@@ -65,6 +65,8 @@ export class PPOTrainer {
     const lrBefore = this.learningRate;
 
     const g = zerosLike(this.model.params);
+    const dLogits = new Float64Array(CONFIG.model.actionSize);
+    const dh = new Float64Array(CONFIG.model.hiddenSize);
     let accPolicy = 0, accValue = 0, accEntropy = 0, accKL = 0, clippedCount = 0, sampleCount = 0;
     let epochsRun = 0;
     let earlyStopped = false;
@@ -82,7 +84,7 @@ export class PPOTrainer {
         for (let pos = start; pos < end; pos++) {
           const n = idx[pos];
           const tr = transitions[n];
-          const f = this.model.forward(tr.obs, tr.hPrev);
+          const f = this.model.forward(tr.obs, tr.hPrev, false);
           const pAct = Math.max(1e-12, f.probs[tr.action]);
           const logp = Math.log(pAct);
           const logRatio = logp - tr.logProb;
@@ -101,7 +103,7 @@ export class PPOTrainer {
           const valueErr = f.value - returns[n];
           const valueLoss = 0.5 * valueErr * valueErr;
           const dLogP = isClipped ? 0 : -ratio * a;
-          const dLogits = new Float64Array(f.probs.length);
+          dLogits.fill(0);
           for (let k = 0; k < dLogits.length; k++) {
             dLogits[k] = dLogP * ((k === tr.action ? 1 : 0) - f.probs[k]);
             dLogits[k] += entropyCoef * f.probs[k] * (Math.log(Math.max(1e-12, f.probs[k])) + entropy);
@@ -110,7 +112,7 @@ export class PPOTrainer {
 
           const p = this.model.params;
           const h = f.h;
-          const dh = new Float64Array(h.length);
+          dh.fill(0);
           for (let k = 0; k < dLogits.length; k++) {
             const off = k * h.length;
             g.bp[k] += dLogits[k];
@@ -203,14 +205,16 @@ export class PPOTrainer {
     const clipScale = norm > cfg.maxGradNorm ? cfg.maxGradNorm / (norm + 1e-12) : 1;
     const scale = gradientScale * clipScale;
     this.t++;
+    const beta1Correction = 1 - Math.pow(cfg.adamBeta1, this.t);
+    const beta2Correction = 1 - Math.pow(cfg.adamBeta2, this.t);
     for (const k of Object.keys(this.model.params)) {
       const p = this.model.params[k], m = this.m[k], v = this.v[k], gg = g[k];
       for (let i = 0; i < p.length; i++) {
         const grad = gg[i] * scale;
         m[i] = cfg.adamBeta1 * m[i] + (1 - cfg.adamBeta1) * grad;
         v[i] = cfg.adamBeta2 * v[i] + (1 - cfg.adamBeta2) * grad * grad;
-        const mh = m[i] / (1 - Math.pow(cfg.adamBeta1, this.t));
-        const vh = v[i] / (1 - Math.pow(cfg.adamBeta2, this.t));
+        const mh = m[i] / beta1Correction;
+        const vh = v[i] / beta2Correction;
         p[i] -= this.learningRate * mh / (Math.sqrt(vh) + cfg.adamEps);
         if (!Number.isFinite(p[i])) throw new Error(`Non-finite parameter ${k}[${i}]`);
       }
@@ -231,6 +235,7 @@ export class PPOTrainer {
       rejectedUpdates: this.rejectedUpdates,
       lrCooldownUpdates: this.lrCooldownUpdates,
       lastStats: this.lastStats,
+      rngState: this.rng.state >>> 0,
     };
   }
 
@@ -241,6 +246,7 @@ export class PPOTrainer {
     this.learningRate = clamp(Number(data.learningRate) || CONFIG.ppo.learningRate, CONFIG.ppo.minLearningRate, CONFIG.ppo.maxLearningRate);
     this.rejectedUpdates = Math.max(0, Number(data.rejectedUpdates) || 0);
     this.lrCooldownUpdates = Math.max(0, Number(data.lrCooldownUpdates) || 0);
+    if (Number.isFinite(Number(data.rngState))) this.rng.state = Number(data.rngState) >>> 0;
     for (const k of Object.keys(this.m)) {
       if (data.m?.[k]?.length === this.m[k].length) this.m[k].set(data.m[k]);
       if (data.v?.[k]?.length === this.v[k].length) this.v[k].set(data.v[k]);

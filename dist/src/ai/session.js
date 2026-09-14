@@ -1,4 +1,4 @@
-import { CONFIG } from '../config.js';
+import { BUILD_MARKER, CONFIG, VERSION } from '../config.js';
 import { domainSeed, PRNG } from '../utils/prng.js';
 import { CURRICULUM, CurriculumManager } from '../sim/curriculum.js';
 import { World } from '../sim/world.js';
@@ -46,6 +46,11 @@ export class TrainingSession {
     this.lineageHistory = [this.learnerLineage];
     this.rehearsalEpisodeHistory = [];
     this.rollbackHistory = [];
+    this.hallOfFame = [];
+    this.nextHallOfFameId = 1;
+    this.frozenLearners = [];
+    this.learnerExperienceSteps = 0;
+    this.lastValidationDurationMs = 0;
     this.envs = [];
     this.obs = [];
     this.hidden = [];
@@ -103,14 +108,18 @@ export class TrainingSession {
     const transitions = [];
     const completed = [];
     let curriculumEvent = null;
-    const started = performanceNow();
-    const preValidation = this.totalSteps >= this.nextValidationStep && this.lastValidationStep !== this.totalSteps ? this.runValidation() : null;
+    let validationMs = 0;
 
+    const preValidationStarted = performanceNow();
+    const preValidation = this.totalSteps >= this.nextValidationStep && this.lastValidationStep !== this.totalSteps ? this.runValidation() : null;
+    if (preValidation) validationMs += performanceNow() - preValidationStarted;
+
+    const simulationStarted = performanceNow();
     for (let s = 0; s < steps; s++) {
       for (let i = 0; i < this.envs.length; i++) {
         const obs = this.obs[i];
         const hPrev = this.hidden[i];
-        const act = this.model.act(obs, hPrev, this.actionRng, false);
+        const act = this.model.act(obs, hPrev, this.actionRng, false, false);
         const result = this.envs[i].step(act.action);
         transitions.push({
           env: i,
@@ -144,19 +153,32 @@ export class TrainingSession {
         }
       }
     }
+    const simulationMs = performanceNow() - simulationStarted;
+    this.learnerExperienceSteps += transitions.length;
 
+    const advantageStarted = performanceNow();
     const lastValues = new Map();
-    for (let i = 0; i < this.envs.length; i++) lastValues.set(i, this.model.forward(this.obs[i], this.hidden[i]).value);
+    for (let i = 0; i < this.envs.length; i++) lastValues.set(i, this.model.forward(this.obs[i], this.hidden[i], false).value);
     const { advantages, returns } = computeGAE(transitions, lastValues);
+    const advantageMs = performanceNow() - advantageStarted;
+
+    const ppoStarted = performanceNow();
     const ppo = this.trainer.update(transitions, advantages, returns, { trainingStep: this.totalSteps });
-    const elapsed = Math.max(1, performanceNow() - started);
+    const ppoMs = performanceNow() - ppoStarted;
+    const coreMs = Math.max(0.001, simulationMs + advantageMs + ppoMs);
     const recent = this.episodeHistory.slice(-40);
     const mean = key => recent.length ? recent.reduce((sum, x) => sum + (x[key] || 0), 0) / recent.length : 0;
 
+    const bookkeepingStarted = performanceNow();
     this.maybeSaveMilestones();
     const forceValidation = Boolean(curriculumEvent && curriculumEvent.reason !== 'promotion-blocked');
+    const bookkeepingBeforeValidationMs = performanceNow() - bookkeepingStarted;
+    const postValidationStarted = performanceNow();
     const postValidation = this.maybeAutoValidate(forceValidation);
+    if (postValidation) validationMs += performanceNow() - postValidationStarted;
     const validation = postValidation || preValidation;
+    const trainingStepsPerSec = transitions.length / (coreMs / 1000);
+    const simulationStepsPerSec = transitions.length / Math.max(0.001, simulationMs / 1000);
     const metric = {
       steps: this.totalSteps,
       episodes: this.totalEpisodes,
@@ -168,12 +190,25 @@ export class TrainingSession {
       meanEnergy: mean('energy'),
       hazardHits: mean('hazardHits'),
       wallHits: mean('wallHits'),
-      throughput: transitions.length / (elapsed / 1000),
+      throughput: trainingStepsPerSec,
+      simulationThroughput: simulationStepsPerSec,
+      profile: {
+        simulationMs,
+        advantageMs,
+        ppoMs,
+        bookkeepingMs: bookkeepingBeforeValidationMs,
+        validationMs,
+        coreMs,
+        trainingStepsPerSec,
+        simulationStepsPerSec,
+        ppoUpdatesPerSec: 1000 / Math.max(0.001, ppoMs),
+      },
       validation: validation ? compactValidation(validation) : null,
       retentionAlertCount: this.retentionStatus.forgetting.length,
       skillScores: this.lastSkillValidation?.stageResults?.map(x => x.skillScore) || [],
       rehearsalMix: this.recentRehearsalMix(),
       learnerLineage: { ...this.learnerLineage },
+      learnerExperienceSteps: this.learnerExperienceSteps,
       ...ppo,
     };
     this.metrics.push(metric);
@@ -451,28 +486,216 @@ export class TrainingSession {
     }));
   }
 
-  forkFromChampion(category = 'balanced') {
+  getHallEntry(id) {
+    return this.hallOfFame.find(entry => entry.id === id) || null;
+  }
+
+  hallOfFameSummary() {
+    return this.hallOfFame.map(entry => ({
+      id: entry.id,
+      label: entry.label,
+      category: entry.category,
+      savedAtSteps: entry.savedAtSteps,
+      pinnedAtSteps: entry.pinnedAtSteps,
+      lineage: entry.lineage || null,
+      sourceVersion: entry.sourceVersion || null,
+      sourceBuild: entry.sourceBuild || null,
+      fingerprint: entry.fingerprint,
+      reason: entry.reason || null,
+    }));
+  }
+
+  exportHallOfFame() {
+    return {
+      schema: 1,
+      nextId: this.nextHallOfFameId,
+      entries: cloneSerializable(this.hallOfFame),
+    };
+  }
+
+  mergeHallOfFame(payload) {
+    const entries = Array.isArray(payload?.entries) ? payload.entries : (Array.isArray(payload) ? payload : []);
+    const existingFingerprints = new Set(this.hallOfFame.map(x => x.fingerprint || modelFingerprint(x.model)));
+    const existingIds = new Set(this.hallOfFame.map(x => x.id));
+    for (const raw of entries) {
+      if (!raw?.model) continue;
+      const fingerprint = raw.fingerprint || modelFingerprint(raw.model);
+      if (existingFingerprints.has(fingerprint)) continue;
+      let id = raw.id;
+      if (!id || existingIds.has(id)) id = this.allocateHallId();
+      const entry = { ...cloneSerializable(raw), id, fingerprint };
+      this.hallOfFame.push(entry);
+      existingFingerprints.add(fingerprint);
+      existingIds.add(id);
+    }
+    const numericIds = this.hallOfFame.map(x => Number(String(x.id || '').match(/(\d+)$/)?.[1] || 0));
+    this.nextHallOfFameId = Math.max(Number(payload?.nextId) || 1, this.nextHallOfFameId, ...numericIds.map(x => x + 1));
+    return this.hallOfFameSummary();
+  }
+
+  allocateHallId() {
+    const id = `HOF-${String(this.nextHallOfFameId).padStart(3, '0')}`;
+    this.nextHallOfFameId++;
+    return id;
+  }
+
+  pinChampion(category = 'balanced', { reason = 'manual-pin' } = {}) {
     const brain = this.getArchiveBrain(category);
-    if (!brain?.model) throw new Error(`No validated ${category} champion is available yet`);
-    const sourceSteps = brain.savedAtSteps;
-    this.model.restore(brain.model);
-    if (brain.optimizer) this.trainer.restore(brain.optimizer);
+    if (!brain?.model) throw new Error(`No validated ${category} Champion is available to pin`);
+    const fingerprint = modelFingerprint(brain.model);
+    const existing = this.hallOfFame.find(entry => entry.fingerprint === fingerprint);
+    if (existing) return { entry: existing, created: false };
+    const entry = {
+      id: this.allocateHallId(),
+      label: `Champion ${category}`,
+      category,
+      savedAtSteps: brain.savedAtSteps,
+      savedAtEpisodes: brain.savedAtEpisodes ?? null,
+      pinnedAtSteps: this.totalSteps,
+      pinnedAtEpisodes: this.totalEpisodes,
+      sourceVersion: VERSION,
+      sourceBuild: BUILD_MARKER,
+      fingerprint,
+      reason,
+      lineage: structuredLineage(brain.lineage),
+      validation: cloneSerializable(brain.validation || null),
+      curriculum: cloneSerializable(brain.curriculum || null),
+      promotionEvidence: cloneSerializable(brain.promotionEvidence || null),
+      model: cloneSerializable(brain.model),
+      optimizer: cloneSerializable(brain.optimizer || null),
+    };
+    this.hallOfFame.push(entry);
+    return { entry, created: true };
+  }
+
+  freezeCurrentLearner(reason = 'manual-branch-freeze') {
+    const lineageId = this.learnerLineage?.id || `L-${(this.seed >>> 0).toString(16)}-unknown`;
+    const entry = {
+      id: lineageId,
+      lineage: structuredLineage(this.learnerLineage),
+      frozenAtSteps: this.totalSteps,
+      frozenAtEpisodes: this.totalEpisodes,
+      learnerExperienceSteps: this.learnerExperienceSteps,
+      reason,
+      curriculum: this.curriculum.serialize(),
+      envSeedCursor: this.envSeedCursor,
+      actionRngState: this.actionRng.state >>> 0,
+      rehearsalEpisodeHistory: [...this.rehearsalEpisodeHistory],
+      model: this.model.serialize(),
+      optimizer: this.trainer.serialize(),
+    };
+    const idx = this.frozenLearners.findIndex(x => x.id === lineageId);
+    if (idx >= 0) this.frozenLearners[idx] = entry;
+    else this.frozenLearners.push(entry);
+    return entry;
+  }
+
+  frozenLearnerSummary() {
+    return this.frozenLearners.map(x => ({
+      id: x.id,
+      lineage: x.lineage || null,
+      frozenAtSteps: x.frozenAtSteps,
+      learnerExperienceSteps: x.learnerExperienceSteps || 0,
+      reason: x.reason || null,
+      curriculumStage: x.curriculum?.stage ?? null,
+    }));
+  }
+
+  resetBranchValidationState() {
+    this.promotionStreaks = Object.fromEntries(ARCHIVE_CATEGORIES.map(x => [x, 0]));
+    this.promotionCandidates = {};
+    this.skillRegressionStreaks = Array(CURRICULUM.length).fill(0);
+    this.balancedRegressionStreak = 0;
+    this.retentionStatus = defaultRetentionStatus();
+    this.lastSkillValidation = null;
+    this.lastValidationStep = -1;
+    this.nextValidationStep = this.totalSteps;
+  }
+
+  activateForkSource(source, parent, reason) {
+    if (!source?.model) throw new Error('Fork source has no model');
+    const frozen = this.freezeCurrentLearner('preserved-before-fork');
+    this.model.restore(source.model);
+    if (source.optimizer) this.trainer.restore(source.optimizer);
+    else this.trainer = new PPOTrainer(this.model, this.seed ^ 0x9e3779b9 ^ (this.lineageCounter + 1));
     this.lineageCounter++;
     const lineage = {
       id: `L-${(this.seed >>> 0).toString(16)}-${this.lineageCounter}`,
       startedAtSteps: this.totalSteps,
-      parent: {
-        category,
-        sourceSteps,
-        lineageId: brain.lineage?.id || null,
-      },
-      reason: 'manual-champion-fork',
+      parent,
+      reason,
     };
     this.learnerLineage = lineage;
+    this.learnerExperienceSteps = 0;
     this.lineageHistory.push(structuredLineage(lineage));
     if (this.lineageHistory.length > 64) this.lineageHistory.shift();
+    this.resetBranchValidationState();
+    this.rehearsalEpisodeHistory = [];
     for (let i = 0; i < this.envs.length; i++) this.resetEnv(i);
-    const event = { atSteps: this.totalSteps, sourceSteps, category, automatic: false, type: 'manual-champion-fork', lineageId: lineage.id };
+    const event = {
+      atSteps: this.totalSteps,
+      sourceSteps: source.savedAtSteps,
+      automatic: false,
+      type: reason,
+      lineageId: lineage.id,
+      preservedLineageId: frozen.id,
+      category: parent?.category || null,
+      hallId: parent?.hallId || null,
+      parent: cloneSerializable(parent),
+    };
+    this.rollbackHistory.push(event);
+    if (this.rollbackHistory.length > 32) this.rollbackHistory.shift();
+    return event;
+  }
+
+  forkFromChampion(category = 'balanced') {
+    const brain = this.getArchiveBrain(category);
+    if (!brain?.model) throw new Error(`No validated ${category} Champion is available yet`);
+    return this.activateForkSource(brain, {
+      type: 'champion',
+      category,
+      sourceSteps: brain.savedAtSteps,
+      lineageId: brain.lineage?.id || null,
+    }, 'manual-champion-fork');
+  }
+
+  forkFromHallOfFame(id) {
+    const entry = this.getHallEntry(id);
+    if (!entry?.model) throw new Error(`Hall of Fame entry ${id} is unavailable`);
+    return this.activateForkSource(entry, {
+      type: 'hall-of-fame',
+      hallId: entry.id,
+      category: entry.category,
+      sourceSteps: entry.savedAtSteps,
+      lineageId: entry.lineage?.id || null,
+    }, 'manual-hall-of-fame-fork');
+  }
+
+  switchToFrozenLearner(lineageId) {
+    const idx = this.frozenLearners.findIndex(x => x.id === lineageId);
+    if (idx < 0) throw new Error(`Frozen Learner ${lineageId} not found`);
+    const target = this.frozenLearners[idx];
+    this.frozenLearners.splice(idx, 1);
+    const preserved = this.freezeCurrentLearner('preserved-before-lineage-switch');
+    this.model.restore(target.model);
+    this.trainer.restore(target.optimizer);
+    this.curriculum.restore(target.curriculum || {});
+    this.envSeedCursor = Number(target.envSeedCursor) || this.envSeedCursor;
+    if (Number.isFinite(Number(target.actionRngState))) this.actionRng.state = Number(target.actionRngState) >>> 0;
+    this.rehearsalEpisodeHistory = Array.isArray(target.rehearsalEpisodeHistory)
+      ? target.rehearsalEpisodeHistory.slice(-CONFIG.continual.recentMixWindow)
+      : [];
+    this.learnerLineage = structuredLineage(target.lineage) || this.learnerLineage;
+    this.learnerExperienceSteps = Math.max(0, Number(target.learnerExperienceSteps) || 0);
+    this.resetBranchValidationState();
+    for (let i = 0; i < this.envs.length; i++) this.resetEnv(i);
+    const event = {
+      atSteps: this.totalSteps,
+      automatic: false,
+      type: 'manual-lineage-switch',
+      lineageId: this.learnerLineage?.id || lineageId,
+      preservedLineageId: preserved.id,
+    };
     this.rollbackHistory.push(event);
     if (this.rollbackHistory.length > 32) this.rollbackHistory.shift();
     return event;
@@ -484,11 +707,12 @@ export class TrainingSession {
 
   snapshot() {
     return {
-      schema: 5,
+      schema: 6,
       seed: this.seed,
       totalSteps: this.totalSteps,
       totalEpisodes: this.totalEpisodes,
       envSeedCursor: this.envSeedCursor,
+      actionRngState: this.actionRng.state >>> 0,
       curriculum: this.curriculum.serialize(),
       model: this.model.serialize(),
       optimizer: this.trainer.serialize(),
@@ -516,14 +740,21 @@ export class TrainingSession {
       lineageCounter: this.lineageCounter,
       lineageHistory: this.lineageHistory,
       rehearsalEpisodeHistory: this.rehearsalEpisodeHistory,
+      learnerExperienceSteps: this.learnerExperienceSteps,
+      hallOfFame: this.exportHallOfFame(),
+      frozenLearners: this.frozenLearners,
       rollbackHistory: this.rollbackHistory,
     };
   }
 
   restore(data) {
-    if (!data || ![1, 2, 3, 4, 5].includes(data.schema)) throw new Error('Unsupported checkpoint schema');
+    if (!data || ![1, 2, 3, 4, 5, 6].includes(data.schema)) throw new Error('Unsupported checkpoint schema');
     this.seed = data.seed;
     this.actionRng = new PRNG(this.seed ^ 0xa5a5a5a5);
+    this.hallOfFame = [];
+    this.nextHallOfFameId = 1;
+    this.frozenLearners = [];
+    this.learnerExperienceSteps = 0;
     this.totalSteps = data.totalSteps || 0;
     this.totalEpisodes = data.totalEpisodes || 0;
     this.envSeedCursor = data.envSeedCursor || 0;
@@ -538,7 +769,7 @@ export class TrainingSession {
       : nextHistoricalMilestoneAfter(this.totalSteps);
     if (data.schema === 1 && this.totalSteps > 0 && !this.milestones.has(this.totalSteps)) this.saveMilestone(this.totalSteps);
 
-    if (data.schema === 5) {
+    if (data.schema === 6 || data.schema === 5) {
       this.bestArchive = data.bestArchive && typeof data.bestArchive === 'object' ? data.bestArchive : {};
       this.bestBrain = this.bestArchive.balanced || data.bestBrain || null;
       this.validationHistory = Array.isArray(data.validationHistory) ? data.validationHistory.slice(-64) : [];
@@ -564,6 +795,16 @@ export class TrainingSession {
       this.rehearsalEpisodeHistory = Array.isArray(data.rehearsalEpisodeHistory)
         ? data.rehearsalEpisodeHistory.filter(x => Number.isInteger(x) && x >= 0 && x < CURRICULUM.length).slice(-CONFIG.continual.recentMixWindow)
         : [];
+      if (data.schema === 6) {
+        if (Number.isFinite(Number(data.actionRngState))) this.actionRng.state = Number(data.actionRngState) >>> 0;
+        this.mergeHallOfFame(data.hallOfFame || []);
+        this.frozenLearners = Array.isArray(data.frozenLearners)
+          ? data.frozenLearners.filter(x => x?.id && x?.model && x?.optimizer).map(cloneSerializable)
+          : [];
+        this.learnerExperienceSteps = Math.max(0, Number(data.learnerExperienceSteps) || 0);
+      } else {
+        this.learnerExperienceSteps = Math.max(0, this.totalSteps - (Number(this.learnerLineage?.startedAtSteps) || 0));
+      }
     } else if (data.schema === 4) {
       // v0.1.1.1 already uses validation:v3. Preserve its champions exactly, but
       // start the active learner as a new continual-learning lineage and validate
@@ -644,6 +885,7 @@ export class TrainingSession {
       this.rehearsalEpisodeHistory = [];
     }
 
+    if (data.schema < 6) this.learnerExperienceSteps = Math.max(0, this.totalSteps - (Number(this.learnerLineage?.startedAtSteps) || 0));
     this.rollbackHistory = Array.isArray(data.rollbackHistory) ? data.rollbackHistory.slice(-32) : [];
     for (let i = 0; i < this.envs.length; i++) this.resetEnv(i);
   }
@@ -792,6 +1034,11 @@ function normalizeRetentionStatus(value) {
   if (!value || typeof value !== 'object') return defaultRetentionStatus();
   const alerts = Array.isArray(value.alerts) ? value.alerts : (Array.isArray(value.forgetting) ? value.forgetting : []);
   return { ...defaultRetentionStatus(), ...value, alerts, forgetting: alerts };
+}
+
+function cloneSerializable(value) {
+  if (value == null) return value;
+  return JSON.parse(JSON.stringify(value));
 }
 
 function uniqueCandidates(values) {

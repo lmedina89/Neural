@@ -62,3 +62,13 @@ export async function loadNewestCheckpoint(names = ['latest', 'autosave']) {
   records.sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
   return records[0];
 }
+
+export const HALL_OF_FAME_SLOT = 'hall-of-fame';
+
+export async function saveHallOfFame(archive) {
+  return saveCheckpoint(archive, HALL_OF_FAME_SLOT);
+}
+
+export async function loadHallOfFameRecord() {
+  return loadCheckpointRecord(HALL_OF_FAME_SLOT);
+}

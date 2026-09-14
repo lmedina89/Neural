@@ -40,17 +40,17 @@ export class RecurrentActorCritic {
 
   zeroHidden() { return zeros(hiddenSize); }
 
-  forward(obs, hPrev) {
+  forward(obs, hPrev, capture = true) {
     const p = this.params;
     const h = new Float64Array(hiddenSize);
-    const pre = new Float64Array(hiddenSize);
+    const pre = capture ? new Float64Array(hiddenSize) : null;
     for (let i = 0; i < hiddenSize; i++) {
       let z = p.bh[i];
       const xo = i * obsSize;
       const ho = i * hiddenSize;
       for (let j = 0; j < obsSize; j++) z += p.wx[xo + j] * obs[j];
       for (let j = 0; j < hiddenSize; j++) z += p.wh[ho + j] * hPrev[j];
-      pre[i] = z;
+      if (pre) pre[i] = z;
       h[i] = Math.tanh(z);
     }
     const logits = new Float64Array(actionSize);
@@ -63,12 +63,13 @@ export class RecurrentActorCritic {
     const probs = softmax(logits);
     let value = p.bv[0];
     for (let i = 0; i < hiddenSize; i++) value += p.wv[i] * h[i];
+    if (!capture) return { h, logits, probs, value };
     this.last = { obs: cloneArray(obs), hPrev: cloneArray(hPrev), pre, h, logits, probs, value };
     return this.last;
   }
 
-  act(obs, hPrev, rng, deterministic = false) {
-    const f = this.forward(obs, hPrev);
+  act(obs, hPrev, rng, deterministic = false, capture = true) {
+    const f = this.forward(obs, hPrev, capture);
     let action = 0;
     if (deterministic) {
       for (let i = 1; i < f.probs.length; i++) if (f.probs[i] > f.probs[action]) action = i;
@@ -80,8 +81,8 @@ export class RecurrentActorCritic {
       action,
       logProb: Math.log(Math.max(1e-12, f.probs[action])),
       value: f.value,
-      hidden: cloneArray(f.h),
-      snapshot: f,
+      hidden: capture ? cloneArray(f.h) : f.h,
+      snapshot: capture ? f : null,
     };
   }
 

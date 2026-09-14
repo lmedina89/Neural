@@ -1,12 +1,13 @@
 {
   "name": "micromind-learning-lab",
-  "version": "0.1.2",
+  "version": "0.1.2.1",
   "private": true,
   "type": "module",
   "scripts": {
     "test": "node --test tests/*.test.mjs",
     "check": "npm test && node scripts/build.mjs",
     "benchmark": "node scripts/benchmark.mjs",
-    "build": "node scripts/build.mjs"
+    "build": "node scripts/build.mjs",
+    "performance": "node scripts/performance.mjs"
   }
 }

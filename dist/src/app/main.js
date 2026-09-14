@@ -5,7 +5,7 @@ import { evaluateFullRetentionSuite, evaluateHeldoutGeneralizationSuite, general
 import { CURRICULUM } from '../sim/curriculum.js';
 import { World } from '../sim/world.js';
 import { domainSeed, PRNG } from '../utils/prng.js';
-import { saveCheckpoint, loadCheckpointRecord } from '../storage/checkpoints.js';
+import { loadCheckpointRecord, loadHallOfFameRecord, saveCheckpoint, saveHallOfFame } from '../storage/checkpoints.js';
 import { WorldRenderer } from '../visualization/worldRenderer.js';
 import { NeuralRenderer } from '../visualization/neuralRenderer.js';
 import { ChartRenderer } from '../visualization/chartRenderer.js';
@@ -24,18 +24,38 @@ const el = {
   latestValidation: $('latestValidation'), bestValidation: $('bestValidation'), retentionAlert: $('retentionAlert'), skillRetention: $('skillRetention'),
   manualSlot: $('manualSlotInfo'), autosaveSlot: $('autosaveSlotInfo'),
   lineage: $('lineageVal'), rehearsal: $('rehearsalVal'), promotion: $('promotionVal'),
+  pinChampion: $('pinChampionBtn'), branchSelect: $('branchSelect'), switchBranch: $('switchBranchBtn'), hallOptions: $('hallBrainOptions'),
+  experienceAge: $('experienceAgeVal'), researchLineage: $('researchLineageVal'), policyOrigin: $('policyOriginVal'), activeChampion: $('activeChampionVal'), hall: $('hallVal'), branches: $('branchesVal'), hallList: $('hallList'),
+  simSpeed: $('simSpeedVal'), ppoMs: $('ppoMsVal'), fps: $('fpsVal'), uiMs: $('uiMsVal'), validationMs: $('validationMsVal'), storageMs: $('storageMsVal'),
 };
 $('buildTag').textContent = `v${VERSION} • ${BUILD_MARKER}`;
 
-const budgets = { eco: { rollout: 8, delay: 30 }, balanced: { rollout: 18, delay: 10 }, max: { rollout: 36, delay: 0 } };
+const budgets = { eco: { rollout: 8, delay: 30 }, balanced: { rollout: 18, delay: 10 }, adaptive: { rollout: 18, delay: 8 }, max: { rollout: 36, delay: 0 } };
 const archiveLabels = { balanced: 'CHAMPION BALANCED', overall: 'CHAMPION OVERALL', forager: 'CHAMPION FORAGER', survivor: 'CHAMPION SURVIVOR', efficiency: 'CHAMPION EFFICIENCY' };
 let mode = 'LEARN', paused = false, trainBusy = false, observeAccum = 0, lastFrame = performance.now(), viewSeedIndex = 0;
+let lastVisualRender = 0, lastUiPaint = 0, lastUiDurationMs = 0, lastStorageDurationMs = 0, browserFps = 60, rafFrames = 0, rafWindowStart = performance.now(), adaptiveDelay = 8, controlSignature = '';
 let session = new TrainingSession({ seed: 1337, envCount: CONFIG.runtime.trainEnvs });
 let archiveModelCache = null, archiveModelCacheKey = null;
 let viewWorld = createViewWorld();
 let viewObs = viewWorld.observe(), viewHidden = session.model.zeroHidden(), lastSnapshot = session.model.forward(viewObs, viewHidden);
 const viewRng = new PRNG(0xabc123);
 const worldRenderer = new WorldRenderer(el.world), neuralRenderer = new NeuralRenderer(el.brain), chartRenderer = new ChartRenderer(el.chart);
+const actionUi = ACTIONS.map(action => {
+  const row = document.createElement('div');
+  row.className = 'actionRow';
+  const name = document.createElement('span');
+  name.textContent = action;
+  const track = document.createElement('div');
+  track.className = 'barTrack';
+  const fill = document.createElement('div');
+  fill.className = 'barFill';
+  track.append(fill);
+  const value = document.createElement('b');
+  value.textContent = '0%';
+  row.append(name, track, value);
+  el.actionBars.append(row);
+  return { fill, value };
+});
 
 function createViewWorld() { return new World(domainSeed('observe:v2', viewSeedIndex++), session.curriculum.current()); }
 function setStatus(s) { el.status.textContent = s; }
@@ -66,12 +86,32 @@ async function refreshSaveSlots() {
     return { manual: null, autosave: null, error: err };
   }
 }
+async function persistHallOfFame() {
+  const started = performance.now();
+  await saveHallOfFame(session.exportHallOfFame());
+  lastStorageDurationMs = performance.now() - started;
+}
+
+async function hydratePersistentHall({ pinMigrationBaseline = false } = {}) {
+  try {
+    const record = await loadHallOfFameRecord();
+    if (record?.snapshot) session.mergeHallOfFame(record.snapshot);
+    if (pinMigrationBaseline && session.hallOfFame.length === 0 && session.getArchiveBrain('balanced')?.model) {
+      session.pinChampion('balanced', { reason: 'v0.1.2-migration-baseline' });
+    }
+    if (session.hallOfFame.length) await persistHallOfFame();
+  } catch (err) {
+    console.warn('Hall of Fame storage unavailable', err);
+  }
+}
+
 async function restoreCheckpointRecord(record, label) {
   const cp = record?.snapshot;
   if (!cp) { setStatus(`No ${label.toLowerCase()} found.`); return false; }
   paused = true;
   el.pause.textContent = 'Resume';
   session.restore(cp);
+  await hydratePersistentHall({ pinMigrationBaseline: cp.schema === 5 });
   archiveModelCache = null;
   archiveModelCacheKey = null;
   viewSeedIndex = 0;
@@ -79,8 +119,8 @@ async function restoreCheckpointRecord(record, label) {
   resetViewState();
   updateUI();
   await refreshSaveSlots();
-  const migration = cp.schema < 5
-    ? ' Legacy checkpoint loaded safely. Champions remain frozen; the active policy becomes a new autonomous continual-learning lineage and is validated before normal training advances.'
+  const migration = cp.schema < 6
+    ? ' Legacy checkpoint loaded safely. Existing Champions are preserved; v0.1.2 Balanced Champion was pinned into the Hall of Fame when no prior Hall record existed.'
     : '';
   setStatus(`${label} restored at ${session.totalSteps.toLocaleString()} steps. Training is PAUSED so you can verify it before pressing Resume/Learn.${migration}`);
   return true;
@@ -94,25 +134,34 @@ async function saveManualSafely() {
       await refreshSaveSlots();
       return;
     }
+    const started = performance.now();
     await saveCheckpoint(session.snapshot(), 'latest');
+    await persistHallOfFame();
+    lastStorageDurationMs = performance.now() - started;
     await refreshSaveSlots();
-    setStatus(`Manual checkpoint saved at ${session.totalSteps.toLocaleString()} steps. Learner lineage, rehearsal state, and frozen Champion archive included.`);
+    setStatus(`Manual checkpoint saved at ${session.totalSteps.toLocaleString()} steps. Learner branches, rehearsal state, Champions, and Hall of Fame backup included.`);
   } catch (e) { setStatus(`Save failed: ${e.message}`); }
 }
 
-function selectedArchiveCategory() {
+function selectedBrainRef() {
   const value = el.brainSource.value;
-  return value === 'latest' ? null : value;
+  if (value === 'latest') return { type: 'learner', key: 'latest', brain: null };
+  if (value.startsWith('hof:')) {
+    const id = value.slice(4);
+    return { type: 'hall', key: value, id, brain: session.getHallEntry(id) };
+  }
+  return { type: 'champion', key: value, category: value, brain: session.getArchiveBrain(value) };
 }
-function selectedArchiveBrain() {
-  const category = selectedArchiveCategory();
-  return category ? session.getArchiveBrain(category) : null;
+function selectedArchiveCategory() {
+  const ref = selectedBrainRef();
+  return ref.type === 'champion' ? ref.category : null;
 }
+function selectedArchiveBrain() { return selectedBrainRef().brain; }
 function selectedViewModel() {
-  const category = selectedArchiveCategory();
-  const brain = selectedArchiveBrain();
-  if (mode === 'LEARN' || !category || !brain?.model) return session.model;
-  const key = `${category}:${brain.savedAtSteps}`;
+  const ref = selectedBrainRef();
+  const brain = ref.brain;
+  if (mode === 'LEARN' || ref.type === 'learner' || !brain?.model) return session.model;
+  const key = `${ref.key}:${brain.savedAtSteps}`;
   if (!archiveModelCache || archiveModelCacheKey !== key) {
     archiveModelCache = new RecurrentActorCritic(1);
     archiveModelCache.restore(brain.model);
@@ -121,10 +170,12 @@ function selectedViewModel() {
   return archiveModelCache;
 }
 function selectedSourceLabel() {
-  const category = selectedArchiveCategory();
-  if (mode !== 'LEARN' && category && selectedArchiveBrain()) return archiveLabels[category] || category.toUpperCase();
-  return 'LEARNER';
+  const ref = selectedBrainRef();
+  if (mode === 'LEARN' || ref.type === 'learner' || !ref.brain) return 'LEARNER';
+  if (ref.type === 'hall') return `${ref.brain.id} HALL OF FAME`;
+  return archiveLabels[ref.category] || ref.category.toUpperCase();
 }
+
 function resetViewState() {
   const model = selectedViewModel();
   viewWorld = createViewWorld();
@@ -152,14 +203,31 @@ function setMode(next) {
       : 'World frozen. Tap to manipulate stimuli and inspect the selected policy response.');
 }
 function resetBrain() {
+  const preservedHall = session.exportHallOfFame();
   session = new TrainingSession({ seed: (Date.now() >>> 0), envCount: CONFIG.runtime.trainEnvs });
+  session.mergeHallOfFame(preservedHall);
   archiveModelCache = null;
   archiveModelCacheKey = null;
   viewSeedIndex = 0;
   el.brainSource.value = 'latest';
   resetViewState();
   syncArchiveControls();
-  setStatus('New untrained brain created.');
+  setStatus('New untrained brain created. Permanent Hall of Fame preserved; prior active learner branches are not part of the new experiment.');
+  updateUI();
+}
+
+function nextTrainingDelay(budgetKey, baseDelay) {
+  if (budgetKey !== 'adaptive') return baseDelay;
+  if (browserFps < 46) adaptiveDelay = Math.min(40, adaptiveDelay + 2);
+  else if (browserFps > 56) adaptiveDelay = Math.max(0, adaptiveDelay - 1);
+  return adaptiveDelay;
+}
+
+function maybeUpdateUI(force = false) {
+  const now = performance.now();
+  const minInterval = mode === 'LEARN' ? 1000 / Math.max(1, CONFIG.runtime.learnUiHz) : 0;
+  if (!force && now - lastUiPaint < minInterval) return;
+  lastUiPaint = now;
   updateUI();
 }
 
@@ -167,8 +235,10 @@ async function trainTick() {
   if (mode !== 'LEARN' || paused) { setTimeout(trainTick, 40); return; }
   if (trainBusy) { setTimeout(trainTick, 10); return; }
   trainBusy = true;
+  let forceUi = false;
   try {
-    const b = budgets[el.budget.value] || budgets.balanced;
+    const budgetKey = el.budget.value;
+    const b = budgets[budgetKey] || budgets.balanced;
     const result = session.trainRollout(b.rollout);
     viewWorld = session.envs[0];
     viewObs = session.obs[0];
@@ -176,8 +246,10 @@ async function trainTick() {
     lastSnapshot = session.model.forward(viewObs, viewHidden);
 
     if (result.metric.updateRejected) {
-      setStatus(`PPO safety rejected an oversized update (KL ${result.metric.maxEpochKL.toFixed(3)}). Weights were rolled back; learning rate reduced to ${result.metric.learningRate.toExponential(2)}.`);
+      forceUi = true;
+      setStatus(`PPO safety rejected an oversized numerical update (KL ${result.metric.maxEpochKL.toFixed(3)}). That optimizer step was undone; autonomous behavioral exploration remains untouched.`);
     } else if (result.validation) {
+      forceUi = true;
       archiveModelCache = null;
       archiveModelCacheKey = null;
       syncArchiveControls();
@@ -185,25 +257,28 @@ async function trainTick() {
       const alerts = v.forgetting?.length ? ` • observed: ${v.forgetting.map(x => `${x.name}${x.confirmed ? ' confirmed' : ''}`).join(', ')}` : '';
       const interp = String(v.interpretation || 'healthy').replaceAll('-', ' ');
       const pendingBalanced = v.promotionPending?.find(x => x.category === 'balanced');
-      if (v.improved) setStatus(`New Champion Balanced promoted @ ${session.bestBrain.savedAtSteps.toLocaleString()} after repeat-confirmed validation. Learner continues independently.`);
+      if (v.improved) setStatus(`New Champion Balanced promoted @ ${session.bestBrain.savedAtSteps.toLocaleString()} after repeat-confirmed validation. Learner continues independently; pin it manually if you want this Champion in the permanent Hall.`);
       else if (pendingBalanced) setStatus(`Learner is challenging Champion Balanced: confirmation ${pendingBalanced.streak}/${pendingBalanced.required}. No weights changed by validation.`);
       else if (v.balancedEvidence || v.forgetting?.length) setStatus(`Validation observed ${interp}: learner ${(v.validation.score * 100).toFixed(1)}% • champion ${(v.bestScore * 100).toFixed(1)}%. Learner keeps learning; no behavioral rollback.${alerts}`);
       else setStatus(`All-skills validation complete: learner ${(v.validation.score * 100).toFixed(1)}% • champion ${(v.bestScore * 100).toFixed(1)}% • retention ${interp}.`);
       try {
+        const saveStarted = performance.now();
         await saveCheckpoint(session.snapshot(), 'autosave');
+        lastStorageDurationMs = performance.now() - saveStarted;
         await refreshSaveSlots();
       } catch (saveErr) {
         console.warn('Validation autosave failed', saveErr);
         setStatus(`${el.status.textContent} Autosave failed: ${saveErr.message}`);
       }
     } else if (result.curriculumEvent) {
+      forceUi = true;
       const e = result.curriculumEvent;
       setStatus(`Autonomous curriculum ${e.reason}: ${CURRICULUM[e.from].name} → ${CURRICULUM[e.to].name}. Earlier skills remain in rehearsal.`);
     } else if (result.metric.earlyStopped && result.metric.maxEpochKL > CONFIG.ppo.targetKL) {
-      setStatus(`PPO epoch stopped early at KL ${result.metric.maxEpochKL.toFixed(3)} to protect the current policy.`);
+      setStatus(`PPO epoch stopped early at KL ${result.metric.maxEpochKL.toFixed(3)} to avoid a numerically oversized optimizer step.`);
     }
-    updateUI();
-    setTimeout(trainTick, b.delay);
+    maybeUpdateUI(forceUi);
+    setTimeout(trainTick, nextTrainingDelay(budgetKey, b.delay));
   } catch (err) {
     console.error(err);
     paused = true;
@@ -232,27 +307,39 @@ function updateProbe() {
 function frame(now) {
   const dt = Math.min(100, now - lastFrame);
   lastFrame = now;
+  rafFrames++;
+  const rafWindow = now - rafWindowStart;
+  if (rafWindow >= 1000) {
+    browserFps = rafFrames * 1000 / rafWindow;
+    rafFrames = 0;
+    rafWindowStart = now;
+  }
   if (mode === 'OBSERVE' && !paused) {
     observeAccum += dt;
     while (observeAccum >= 55) { stepObserved(); observeAccum -= 55; }
   }
-  const model = selectedViewModel();
-  worldRenderer.draw(viewWorld, mode + (paused ? ' • PAUSED' : ''));
-  neuralRenderer.mode = el.brainView.value;
-  neuralRenderer.draw(model, lastSnapshot);
-  chartRenderer.draw(session.metrics);
-  updateDecision();
+  const renderHz = mode === 'LEARN'
+    ? CONFIG.runtime.learnRenderHz
+    : mode === 'OBSERVE'
+      ? CONFIG.runtime.observeRenderHz
+      : CONFIG.runtime.probeRenderHz;
+  if (now - lastVisualRender >= 1000 / Math.max(1, renderHz)) {
+    lastVisualRender = now;
+    const model = selectedViewModel();
+    worldRenderer.draw(viewWorld, mode + (paused ? ' • PAUSED' : ''));
+    neuralRenderer.mode = el.brainView.value;
+    neuralRenderer.draw(model, lastSnapshot);
+    updateDecision();
+  }
   requestAnimationFrame(frame);
 }
 function updateDecision() {
   const s = lastSnapshot;
   if (!s) return;
-  el.actionBars.innerHTML = '';
   for (let i = 0; i < ACTIONS.length; i++) {
-    const row = document.createElement('div');
-    row.className = 'actionRow';
-    row.innerHTML = `<span>${ACTIONS[i]}</span><div class="barTrack"><div class="barFill" style="width:${(s.probs[i] * 100).toFixed(1)}%"></div></div><b>${(s.probs[i] * 100).toFixed(0)}%</b>`;
-    el.actionBars.append(row);
+    const pctValue = s.probs[i] * 100;
+    actionUi[i].fill.style.width = `${pctValue.toFixed(1)}%`;
+    actionUi[i].value.textContent = `${pctValue.toFixed(0)}%`;
   }
   el.value.textContent = `value ${s.value.toFixed(3)}`;
   const rp = viewWorld.lastRewardParts || {};
@@ -263,7 +350,18 @@ function updateDecision() {
   el.viewBrainBadge.textContent = selectedSourceLabel();
 }
 
+function policyOriginText() {
+  const lineage = session.learnerLineage;
+  const parent = lineage?.parent;
+  if (!parent) return 'native learner';
+  if (parent.type === 'hall-of-fame') return `${parent.hallId || 'Hall'} @ ${Number(parent.sourceSteps || 0).toLocaleString()}`;
+  if (parent.type === 'champion') return `Champion ${title(parent.category || 'balanced')} @ ${Number(parent.sourceSteps || 0).toLocaleString()}`;
+  if (parent.legacySchema) return `schema-${parent.legacySchema} migration`;
+  return lineage.reason || 'derived learner';
+}
+
 function updateUI() {
+  const uiStarted = performance.now();
   const m = session.metrics.at(-1);
   el.steps.textContent = session.totalSteps.toLocaleString();
   el.episodes.textContent = session.totalEpisodes.toLocaleString();
@@ -283,16 +381,39 @@ function updateUI() {
   else if (balancedBrain?.validation) el.bestValidation.textContent = `legacy ${Number(balancedBrain.validation.score ?? 0).toFixed(2)} @ ${balancedBrain.savedAtSteps.toLocaleString()}`;
   else el.bestValidation.textContent = '—';
   el.retentionAlert.textContent = session.lastSkillValidation ? retentionLabel(session.retentionStatus) : '—';
-  el.lineage.textContent = `${session.learnerLineage?.id || '—'} @ ${(session.learnerLineage?.startedAtSteps ?? 0).toLocaleString()}`;
+  el.lineage.textContent = `${session.learnerLineage?.id || '—'} @ ${(session.learnerLineage?.startedAtSteps ?? 0).toLocaleString()} • ${Number(session.learnerExperienceSteps || 0).toLocaleString()} trained`;
   const mix = session.recentRehearsalMix();
   const mixValues = mix.total ? mix.fractions : mix.target;
   el.rehearsal.textContent = mixValues.map((x, i) => x >= 0.005 ? `${CURRICULUM[i].name.split(' ')[0]} ${Math.round(x * 100)}%` : null).filter(Boolean).join(' • ');
   const pending = Object.entries(session.promotionCandidates || {}).map(([category, x]) => `${title(category)} ${x.streak}/${CONFIG.validation.championPromotionConfirmations}`);
   el.promotion.textContent = pending.length ? pending.join(' • ') : 'none pending';
+
+  const profile = m?.profile || {};
+  el.simSpeed.textContent = Number.isFinite(profile.simulationStepsPerSec) ? `${Math.round(profile.simulationStepsPerSec).toLocaleString()}/s` : '—';
+  el.ppoMs.textContent = Number.isFinite(profile.ppoMs) ? `${profile.ppoMs.toFixed(1)} ms` : '—';
+  el.fps.textContent = `${browserFps.toFixed(0)}`;
+  el.validationMs.textContent = Number.isFinite(profile.validationMs) && profile.validationMs > 0 ? `${profile.validationMs.toFixed(0)} ms` : '—';
+  el.storageMs.textContent = lastStorageDurationMs > 0 ? `${lastStorageDurationMs.toFixed(0)} ms` : '—';
+
+  const hall = session.hallOfFameSummary();
+  const branches = session.frozenLearnerSummary();
+  el.experienceAge.textContent = session.totalSteps.toLocaleString();
+  el.researchLineage.textContent = `${session.learnerLineage?.id || '—'} • ${Number(session.learnerExperienceSteps || 0).toLocaleString()} branch steps`;
+  el.policyOrigin.textContent = policyOriginText();
+  el.activeChampion.textContent = balancedBrain ? `${balancedBrain.savedAtSteps.toLocaleString()} • ${pct(balancedBrain.validation?.categoryScores?.balanced)}` : 'none';
+  el.hall.textContent = hall.length ? `${hall.length} pinned` : 'empty';
+  el.branches.textContent = `${branches.length}`;
+  el.hallList.textContent = hall.length
+    ? hall.map(x => `${x.id} • ${Number(x.savedAtSteps || 0).toLocaleString()} • ${title(x.category || 'brain')} • ${x.lineage?.id || 'unknown lineage'}`).join('   |   ')
+    : 'No pinned historic brains yet.';
+
   renderSkillRetention();
   chartRenderer.draw(session.metrics);
   syncArchiveControls();
+  lastUiDurationMs = performance.now() - uiStarted;
+  el.uiMs.textContent = `${lastUiDurationMs.toFixed(1)} ms`;
 }
+
 function renderSkillRetention() {
   const validation = session.lastSkillValidation;
   if (!validation?.stageResults?.length) { el.skillRetention.textContent = 'Waiting for autonomous continual-learning validation…'; return; }
@@ -320,30 +441,71 @@ function retentionLabel(status) {
 }
 
 function syncArchiveControls() {
-  const map = {
+  const championMap = {
     balanced: el.bestOption,
     overall: el.overallOption,
     forager: el.foragerOption,
     survivor: el.survivorOption,
     efficiency: el.efficiencyOption,
   };
-  for (const [category, option] of Object.entries(map)) {
-    const brain = session.getArchiveBrain(category);
-    option.disabled = !brain?.model;
-    const needsRebaseline = session.archiveNeedsRebaseline;
-    const isLegacy = Boolean(brain?.model && !brain?.validation?.categoryScores);
-    option.textContent = brain
-      ? needsRebaseline
-        ? `Prior Champion ${title(category)} @ ${brain.savedAtSteps.toLocaleString()} (calibration pending)`
-        : isLegacy
-          ? `Legacy Champion @ ${brain.savedAtSteps.toLocaleString()} (calibration pending)`
-          : `Champion ${title(category)} @ ${brain.savedAtSteps.toLocaleString()}`
-      : `Champion ${title(category)} (not validated)`;
+  const hall = session.hallOfFameSummary();
+  const branches = session.frozenLearnerSummary();
+  const signature = JSON.stringify({
+    archiveNeedsRebaseline: session.archiveNeedsRebaseline,
+    champions: Object.fromEntries(Object.keys(championMap).map(k => [k, session.getArchiveBrain(k)?.savedAtSteps ?? null])),
+    hall: hall.map(x => [x.id, x.savedAtSteps]),
+    branches: branches.map(x => [x.id, x.frozenAtSteps]),
+    active: session.learnerLineage?.id,
+  });
+  if (signature !== controlSignature) {
+    controlSignature = signature;
+    for (const [category, option] of Object.entries(championMap)) {
+      const brain = session.getArchiveBrain(category);
+      option.disabled = !brain?.model;
+      const needsRebaseline = session.archiveNeedsRebaseline;
+      const isLegacy = Boolean(brain?.model && !brain?.validation?.categoryScores);
+      option.textContent = brain
+        ? needsRebaseline
+          ? `Prior Champion ${title(category)} @ ${brain.savedAtSteps.toLocaleString()} (calibration pending)`
+          : isLegacy
+            ? `Legacy Champion @ ${brain.savedAtSteps.toLocaleString()} (calibration pending)`
+            : `Champion ${title(category)} @ ${brain.savedAtSteps.toLocaleString()}`
+        : `Champion ${title(category)} (not validated)`;
+    }
+    const priorBrainValue = el.brainSource.value;
+    el.hallOptions.replaceChildren();
+    for (const entry of hall) {
+      const option = document.createElement('option');
+      option.value = `hof:${entry.id}`;
+      option.textContent = `${entry.id} • ${Number(entry.savedAtSteps || 0).toLocaleString()} • ${title(entry.category || 'brain')}`;
+      el.hallOptions.append(option);
+    }
+    if ([...el.brainSource.options].some(o => o.value === priorBrainValue && !o.disabled)) el.brainSource.value = priorBrainValue;
+    else el.brainSource.value = 'latest';
+
+    const priorBranchValue = el.branchSelect.value;
+    el.branchSelect.replaceChildren();
+    const active = document.createElement('option');
+    active.value = 'active';
+    active.textContent = `Active ${session.learnerLineage?.id || 'Learner'} • ${Number(session.learnerExperienceSteps || 0).toLocaleString()} branch steps`;
+    el.branchSelect.append(active);
+    for (const branch of branches) {
+      const option = document.createElement('option');
+      option.value = branch.id;
+      option.textContent = `${branch.id} • frozen @ ${Number(branch.frozenAtSteps || 0).toLocaleString()} • ${Number(branch.learnerExperienceSteps || 0).toLocaleString()} branch steps`;
+      el.branchSelect.append(option);
+    }
+    if ([...el.branchSelect.options].some(o => o.value === priorBranchValue)) el.branchSelect.value = priorBranchValue;
+    else el.branchSelect.value = 'active';
   }
-  const selected = selectedArchiveCategory();
-  if (selected && !session.getArchiveBrain(selected)) el.brainSource.value = 'latest';
-  const restoreTarget = selectedArchiveBrain() || session.getArchiveBrain('balanced');
-  el.restoreBest.disabled = session.archiveNeedsRebaseline || !restoreTarget?.validation?.categoryScores;
+
+  const ref = selectedBrainRef();
+  if (ref.type !== 'learner' && !ref.brain?.model) el.brainSource.value = 'latest';
+  const currentRef = selectedBrainRef();
+  const forkTarget = currentRef.type === 'learner' ? session.getArchiveBrain('balanced') : currentRef.brain;
+  el.restoreBest.disabled = session.archiveNeedsRebaseline || !forkTarget?.model;
+  el.pinChampion.disabled = session.archiveNeedsRebaseline || currentRef.type !== 'champion' || !currentRef.brain?.model;
+  el.switchBranch.disabled = el.branchSelect.value === 'active' || !session.frozenLearners.some(x => x.id === el.branchSelect.value);
 }
 
 function suiteText(name, r) {
@@ -410,6 +572,9 @@ async function compareBrains() {
   raw.push({ savedAtSteps: session.totalSteps, model: session.model.serialize(), kind: 'latest' });
   const balanced = session.getArchiveBrain('balanced');
   if (balanced?.model) raw.push({ savedAtSteps: balanced.savedAtSteps, model: balanced.model, kind: 'balanced' });
+  for (const entry of session.hallOfFame || []) {
+    if (entry?.model) raw.push({ savedAtSteps: entry.savedAtSteps, model: entry.model, kind: 'hall', hallId: entry.id });
+  }
   const entries = [], seen = new Set();
   for (const e of raw) {
     const key = `${e.savedAtSteps}:${e.kind}`;
@@ -431,9 +596,9 @@ async function compareBrains() {
   }
   let html = '<table class="resultsTable"><thead><tr><th>brain</th><th>gen</th><th>return</th><th>food</th><th>survival</th></tr></thead><tbody>';
   for (const { cp, r } of rows) {
-    const isBest = cp.kind === 'balanced', isLatest = cp.kind === 'latest';
-    const cls = isBest ? 'bestRow' : '';
-    const label = `${cp.savedAtSteps.toLocaleString()}${isBest ? ' ★ CHAMPION' : ''}${isLatest ? ' LEARNER' : ''}`;
+    const isBest = cp.kind === 'balanced', isLatest = cp.kind === 'latest', isHall = cp.kind === 'hall';
+    const cls = isBest || isHall ? 'bestRow' : '';
+    const label = `${cp.savedAtSteps.toLocaleString()}${isBest ? ' ★ CHAMPION' : ''}${isLatest ? ' LEARNER' : ''}${isHall ? ` ${cp.hallId} HALL` : ''}`;
     html += `<tr class="${cls}"><td>${label}</td><td>${pct(r.balancedScore)}</td><td>${r.meanReturn.toFixed(2)}</td><td>${r.meanFood.toFixed(2)}</td><td>${(r.survivalRate * 100).toFixed(0)}%</td></tr>`;
   }
   html += '</tbody></table><div class="comparisonNote">Comparison uses heldout:compare:v2, not the final Unseen Test domain.</div>';
@@ -451,8 +616,8 @@ el.probe.addEventListener('click', () => setMode('PROBE'));
 el.pause.addEventListener('click', () => { paused = !paused; el.pause.textContent = paused ? 'Resume' : 'Pause'; setStatus(paused ? 'Paused. Neural state remains inspectable.' : 'Resumed.'); });
 el.brainView.addEventListener('change', () => { neuralRenderer.mode = el.brainView.value; });
 el.brainSource.addEventListener('change', () => {
-  const category = selectedArchiveCategory();
-  if (category && !session.getArchiveBrain(category)) { el.brainSource.value = 'latest'; return; }
+  const ref = selectedBrainRef();
+  if (ref.type !== 'learner' && !ref.brain?.model) { el.brainSource.value = 'latest'; return; }
   if (mode !== 'LEARN') resetViewState();
   el.viewBrainBadge.textContent = selectedSourceLabel();
   syncArchiveControls();
@@ -461,19 +626,54 @@ el.brainSource.addEventListener('change', () => {
 el.save.addEventListener('click', saveManualSafely);
 el.loadManual.addEventListener('click', async () => { try { await restoreCheckpointRecord(await loadCheckpointRecord('latest'), 'Manual Save'); } catch (e) { setStatus(`Manual load failed: ${e.message}`); } });
 el.loadAutosave.addEventListener('click', async () => { try { await restoreCheckpointRecord(await loadCheckpointRecord('autosave'), 'Validation Autosave'); } catch (e) { setStatus(`Autosave load failed: ${e.message}`); } });
+el.pinChampion.addEventListener('click', async () => {
+  try {
+    const ref = selectedBrainRef();
+    if (ref.type !== 'champion' || !ref.brain?.model) { setStatus('Select a validated Champion in View Brain before pinning it.'); return; }
+    const result = session.pinChampion(ref.category, { reason: 'manual-pin' });
+    await persistHallOfFame();
+    controlSignature = '';
+    updateUI();
+    setStatus(result.created
+      ? `${result.entry.id} permanently pinned from Champion ${title(ref.category)} @ ${result.entry.savedAtSteps.toLocaleString()} steps.`
+      : `${result.entry.id} already preserves that exact Champion policy; no duplicate was created.`);
+  } catch (e) { setStatus(`Hall of Fame pin failed: ${e.message}`); }
+});
 el.restoreBest.addEventListener('click', () => {
-  const category = selectedArchiveCategory() || 'balanced';
-  const brain = session.getArchiveBrain(category);
-  if (!brain) return;
-  const source = brain.savedAtSteps;
-  if (!confirm(`Fork a NEW Learner lineage from Champion ${title(category)} @ ${source.toLocaleString()} steps? This is a manual experiment only. Experience age stays ${session.totalSteps.toLocaleString()} and automatic validation never performs this action.`)) return;
-  const event = session.forkFromChampion(category);
+  const ref = selectedBrainRef();
+  const fallback = session.getArchiveBrain('balanced');
+  const source = ref.type === 'learner' ? fallback : ref.brain;
+  if (!source?.model) return;
+  const sourceLabel = ref.type === 'hall'
+    ? `${ref.brain.id} Hall of Fame @ ${ref.brain.savedAtSteps.toLocaleString()}`
+    : ref.type === 'champion'
+      ? `Champion ${title(ref.category)} @ ${ref.brain.savedAtSteps.toLocaleString()}`
+      : `Champion Balanced @ ${fallback.savedAtSteps.toLocaleString()}`;
+  if (!confirm(`Fork a NEW Learner lineage from ${sourceLabel}? The current Learner will be frozen and preserved as a switchable branch. Global experience age stays ${session.totalSteps.toLocaleString()}.`)) return;
+  const event = ref.type === 'hall' ? session.forkFromHallOfFame(ref.id) : session.forkFromChampion(ref.type === 'champion' ? ref.category : 'balanced');
   archiveModelCache = null;
   archiveModelCacheKey = null;
+  controlSignature = '';
   el.brainSource.value = 'latest';
   resetViewState();
   updateUI();
-  setStatus(`Learner forked manually from Champion ${title(category)} @ ${source.toLocaleString()} • lineage ${event.lineageId}.`);
+  setStatus(`New Learner ${event.lineageId} forked from ${sourceLabel}. Prior Learner ${event.preservedLineageId} is frozen and switchable.`);
+});
+el.branchSelect.addEventListener('change', syncArchiveControls);
+el.switchBranch.addEventListener('click', () => {
+  const id = el.branchSelect.value;
+  if (!id || id === 'active') return;
+  if (!confirm(`Switch active training to frozen Learner ${id}? The current Learner will be frozen first. Champions and Hall of Fame are shared; global experience age remains monotonic.`)) return;
+  try {
+    const event = session.switchToFrozenLearner(id);
+    archiveModelCache = null;
+    archiveModelCacheKey = null;
+    controlSignature = '';
+    el.brainSource.value = 'latest';
+    resetViewState();
+    updateUI();
+    setStatus(`Active Learner switched to ${event.lineageId}. Previous Learner ${event.preservedLineageId} is frozen. Immediate validation is scheduled before long training continues.`);
+  } catch (e) { setStatus(`Branch switch failed: ${e.message}`); }
 });
 el.test.addEventListener('click', runUnseen);
 el.compare.addEventListener('click', compareBrains);
@@ -502,4 +702,8 @@ requestAnimationFrame(frame);
 refreshSaveSlots().then(({ manual }) => {
   if (manual?.snapshot?.totalSteps > session.totalSteps) setStatus(`Stored Manual Save detected at ${Number(manual.snapshot.totalSteps).toLocaleString()} steps. It is protected from lower-step overwrite; use Load Manual to recover it.`);
 });
+hydratePersistentHall().then(() => {
+  controlSignature = '';
+  updateUI();
+}).catch(e => setStatus(`Hall of Fame storage check failed: ${e.message}`));
 trainTick();

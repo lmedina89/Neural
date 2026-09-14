@@ -100,10 +100,12 @@ export class World {
       fd = clamp(Math.hypot(dx, dy) / 1.2, 0, 1);
     }
     const speed = Math.hypot(a.vx, a.vy) / CONFIG.physics.maxSpeed;
-    const rays = CONFIG.world.rayAngles.map(ang => this.rayDistance(ang) / CONFIG.world.sensorRange);
+    const ray0 = this.rayDistance(CONFIG.world.rayAngles[0]) / CONFIG.world.sensorRange;
+    const ray1 = this.rayDistance(CONFIG.world.rayAngles[1]) / CONFIG.world.sensorRange;
+    const ray2 = this.rayDistance(CONFIG.world.rayAngles[2]) / CONFIG.world.sensorRange;
     const obs = new Float64Array([
       relX, relY, fd,
-      1 - rays[0], 1 - rays[1], 1 - rays[2],
+      1 - ray0, 1 - ray1, 1 - ray2,
       clamp(speed, 0, 1),
       clamp(a.omega / CONFIG.physics.maxAngularSpeed, -1, 1),
       clamp(a.energy, 0, 1),
