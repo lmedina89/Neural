@@ -1,4 +1,4 @@
-# Architecture — MicroMind v0.1.0.1
+# Architecture — MicroMind v0.1.0.1.1
 
 MicroMind is split into simulation, learning, evaluation, persistence, and visualization layers.
 
@@ -29,7 +29,7 @@ Rollouts retain observation, previous recurrent state, action, old log probabili
 
 ### Recurrent limitation retained intentionally
 
-The stored recurrent state is treated as a stop-gradient input during each PPO sample update. Recurrent weights are trainable and state carries across timesteps, but gradients are not propagated backward through long sequences. v0.1.0.1 deliberately does not alter this while solving policy-stability and checkpoint-protection issues. Sequence minibatches/truncated BPTT remain a later research milestone.
+The stored recurrent state is treated as a stop-gradient input during each PPO sample update. Recurrent weights are trainable and state carries across timesteps, but gradients are not propagated backward through long sequences. v0.1.0.1.1 deliberately does not alter this while solving policy-stability and checkpoint-protection issues. Sequence minibatches/truncated BPTT remain a later research milestone.
 
 ## Seed domains
 

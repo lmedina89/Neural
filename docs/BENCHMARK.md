@@ -1,4 +1,4 @@
-# Controlled learning/stability benchmark — v0.1.0.1 LEARNSTAB-0101
+# Controlled learning/stability benchmark — v0.1.0.1.1 HISTCONT-01011
 
 A reproducible smoke benchmark was run with:
 

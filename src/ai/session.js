@@ -21,7 +21,7 @@ export class TrainingSession {
     this.metrics = [];
     this.episodeHistory = [];
     this.milestones = new Map();
-    this.milestoneSteps = [0, 1000, 10000, 50000, 100000, 500000, 1000000];
+    this.nextMilestoneStep = nextHistoricalMilestoneAfter(0);
     this.bestBrain = null;
     this.bestBrains = {};
     this.validationHistory = [];
@@ -125,9 +125,10 @@ export class TrainingSession {
   }
 
   maybeSaveMilestones() {
-    for (const step of this.milestoneSteps) {
-      if (step > 0 && this.totalSteps >= step && !this.milestones.has(step)) this.saveMilestone(step);
-    }
+    if (this.totalSteps < this.nextMilestoneStep) return;
+    const label = this.nextMilestoneStep;
+    this.saveMilestone(label);
+    this.nextMilestoneStep = nextHistoricalMilestoneAfter(this.totalSteps);
   }
 
   saveMilestone(label = this.totalSteps) {
@@ -213,6 +214,7 @@ export class TrainingSession {
       optimizer: this.trainer.serialize(),
       metrics: this.metrics,
       milestones: Array.from(this.milestones.entries()),
+      nextMilestoneStep: this.nextMilestoneStep,
       bestBrain: this.bestBrain,
       bestBrains: this.bestBrains,
       validationHistory: this.validationHistory,
@@ -235,6 +237,13 @@ export class TrainingSession {
     if (data.schema === 1) this.curriculum.cooldownRemaining = CONFIG.curriculum.transitionCooldownEpisodes;
     this.metrics = Array.isArray(data.metrics) ? data.metrics.slice(-CONFIG.runtime.chartPoints) : [];
     this.milestones = new Map(Array.isArray(data.milestones) ? data.milestones : []);
+    // Never fabricate missed historical brains when upgrading an old long-running session.
+    // Continue from the first milestone strictly after the restored step count.
+    this.nextMilestoneStep = Number.isFinite(data.nextMilestoneStep) && data.nextMilestoneStep > this.totalSteps
+      ? data.nextMilestoneStep
+      : nextHistoricalMilestoneAfter(this.totalSteps);
+    // Preserve the exact policy present at a legacy migration point before training changes it.
+    if (data.schema === 1 && this.totalSteps > 0 && !this.milestones.has(this.totalSteps)) this.saveMilestone(this.totalSteps);
     this.bestBrains = data.schema >= 2 && data.bestBrains && typeof data.bestBrains === 'object' ? data.bestBrains : {};
     if (data.schema >= 2 && data.bestBrain?.model && data.bestBrain.validation?.protocol && !this.bestBrains[data.bestBrain.validation.protocol]) this.bestBrains[data.bestBrain.validation.protocol] = data.bestBrain;
     const protocol = currentValidationProtocol(this.curriculum.stage);
@@ -269,6 +278,20 @@ function nextValidationAfter(steps) {
   const anchor = cfg.schedule.at(-1) || 0;
   const intervals = Math.floor(Math.max(0, steps - anchor) / cfg.intervalAfterSchedule) + 1;
   return anchor + intervals * cfg.intervalAfterSchedule;
+}
+
+export function nextHistoricalMilestoneAfter(steps) {
+  const fixed = [1000, 10000, 50000, 100000, 250000, 500000, 750000, 1000000];
+  for (const step of fixed) if (step > steps) return step;
+  if (steps < 5_000_000) return nextGridStep(steps, 1_000_000, 250_000);
+  if (steps < 20_000_000) return nextGridStep(steps, 5_000_000, 500_000);
+  if (steps < 100_000_000) return nextGridStep(steps, 20_000_000, 1_000_000);
+  return nextGridStep(steps, 100_000_000, 5_000_000);
+}
+
+function nextGridStep(steps, anchor, interval) {
+  const n = Math.floor(Math.max(0, steps - anchor) / interval) + 1;
+  return anchor + n * interval;
 }
 
 function performanceNow() {

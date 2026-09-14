@@ -1,5 +1,5 @@
-export const VERSION = '0.1.0.1';
-export const BUILD_MARKER = 'LEARNSTAB-0101';
+export const VERSION = '0.1.0.1.1';
+export const BUILD_MARKER = 'HISTCONT-01011';
 
 export const CONFIG = Object.freeze({
   world: {

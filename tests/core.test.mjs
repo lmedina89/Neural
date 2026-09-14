@@ -7,10 +7,10 @@ import { CURRICULUM, CurriculumManager } from '../src/sim/curriculum.js';
 import { World } from '../src/sim/world.js';
 import { RecurrentActorCritic } from '../src/ai/model.js';
 import { computeGAE } from '../src/ai/rollout.js';
-import { TrainingSession } from '../src/ai/session.js';
+import { TrainingSession, nextHistoricalMilestoneAfter } from '../src/ai/session.js';
 import { evaluateCurriculumSuite } from '../src/evaluation/evaluator.js';
 
-test('release identity is v0.1.0.1 learning stability hotfix',()=>{assert.equal(VERSION,'0.1.0.1');assert.equal(BUILD_MARKER,'LEARNSTAB-0101')});
+test('release identity is v0.1.0.1.1 extended history hotfix',()=>{assert.equal(VERSION,'0.1.0.1.1');assert.equal(BUILD_MARKER,'HISTCONT-01011')});
 test('PRNG is repeatable',()=>{const a=new PRNG(123),b=new PRNG(123);for(let i=0;i<100;i++)assert.equal(a.nextUint(),b.nextUint())});
 test('seed domains are separated',()=>{assert.notEqual(domainSeed('train',0),domainSeed('heldout:v1',0));assert.notEqual(domainSeed('validation:v1',0),domainSeed('heldout:v1',0));assert.notEqual(domainSeed('validation:v1',0),domainSeed('train',0))});
 test('world generation is deterministic',()=>{const a=new World(77,CURRICULUM[2]),b=new World(77,CURRICULUM[2]);assert.deepEqual(a.food,b.food);assert.deepEqual(a.hazards,b.hazards);assert.deepEqual(a.walls,b.walls);assert.deepEqual(Array.from(a.observe()),Array.from(b.observe()))});
@@ -32,3 +32,25 @@ test('v0.1.0 schema-1 checkpoint migrates without losing model and schedules val
 test('migrated legacy run validates its existing curriculum before further training',()=>{const a=new TrainingSession({seed:31,envCount:2,autoCurriculum:false});const snap=a.snapshot();const legacy={schema:1,seed:snap.seed,totalSteps:602496,totalEpisodes:1034,envSeedCursor:snap.envSeedCursor,curriculum:{stage:2,history:Array(40).fill(0.1)},model:snap.model,optimizer:snap.optimizer,metrics:[],milestones:snap.milestones};const b=new TrainingSession({seed:99,envCount:2,autoCurriculum:true});b.restore(legacy);b.trainRollout(1);assert.ok(b.validationHistory.length>=1);assert.equal(b.validationHistory[0].validation.maxStage,2);assert.ok(b.bestBrains[b.validationHistory[0].validation.protocol]);});
 test('reward is decomposed into finite named components',()=>{const w=new World(12345,CURRICULUM[1]);const r=w.step(1);const parts=r.info.rewardParts;for(const k of ['survival','energy','wall','food','hazard','approach','death'])assert.ok(Number.isFinite(parts[k]),k)});
 test('mobile help and best-brain controls are present in static UI',async()=>{const html=await readFile(new URL('../index.html',import.meta.url),'utf8');for(const id of ['brainSource','bestOption','restoreBestBtn','latestValidation','bestValidation'])assert.match(html,new RegExp(`id="${id}"`));assert.match(html,/What do the controls and numbers mean\?/)});
+
+test('historical milestone schedule continues beyond one million steps',()=>{
+  assert.equal(nextHistoricalMilestoneAfter(1_000_000),1_250_000);
+  assert.equal(nextHistoricalMilestoneAfter(2_122_848),2_250_000);
+  assert.equal(nextHistoricalMilestoneAfter(4_999_999),5_000_000);
+  assert.equal(nextHistoricalMilestoneAfter(5_000_000),5_500_000);
+  assert.equal(nextHistoricalMilestoneAfter(20_000_000),21_000_000);
+  assert.equal(nextHistoricalMilestoneAfter(100_000_000),105_000_000);
+});
+
+test('legacy long-run migration snapshots the exact loaded brain and does not backfill fake milestones',()=>{
+  const a=new TrainingSession({seed:44,envCount:2,autoCurriculum:false});
+  const snap=a.snapshot();
+  const steps=2_122_848;
+  const legacy={schema:1,seed:snap.seed,totalSteps:steps,totalEpisodes:3000,envSeedCursor:snap.envSeedCursor,curriculum:{stage:2,history:[]},model:snap.model,optimizer:snap.optimizer,metrics:[],milestones:snap.milestones};
+  const b=new TrainingSession({seed:45,envCount:2,autoCurriculum:false});
+  b.restore(legacy);
+  assert.equal(b.nextMilestoneStep,2_250_000);
+  assert.ok(b.milestones.has(steps));
+  assert.equal(b.milestones.has(1_250_000),false);
+  assert.equal(b.milestones.has(1_500_000),false);
+});

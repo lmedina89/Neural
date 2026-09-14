@@ -133,7 +133,14 @@ async function runUnseen(){
 
 async function compareBrains(){
   paused=true;el.pause.textContent='Resume';setStatus('Comparing historical brains on identical held-out seeds…');await yieldUI();
-  const raw=[...session.milestones.values()].sort((a,b)=>a.savedAtSteps-b.savedAtSteps).slice(-8).map(cp=>({savedAtSteps:cp.savedAtSteps,model:cp.model,kind:'milestone'}));
+  const historical=[...session.milestones.values()].sort((a,b)=>a.savedAtSteps-b.savedAtSteps);
+  const selected=[];const selectedSteps=new Set();
+  const addHistorical=(cp)=>{if(cp&&!selectedSteps.has(cp.savedAtSteps)){selectedSteps.add(cp.savedAtSteps);selected.push(cp)}};
+  addHistorical(historical[0]);
+  for(const target of [100000,500000,1000000]) addHistorical(historical.find(cp=>cp.label===target));
+  for(const cp of historical.slice(-8)) addHistorical(cp);
+  selected.sort((a,b)=>a.savedAtSteps-b.savedAtSteps);
+  const raw=selected.map(cp=>({savedAtSteps:cp.savedAtSteps,model:cp.model,kind:'milestone'}));
   raw.push({savedAtSteps:session.totalSteps,model:session.model.serialize(),kind:'latest'});
   if(session.bestBrain?.model)raw.push({savedAtSteps:session.bestBrain.savedAtSteps,model:session.bestBrain.model,kind:'best'});
   const entries=[];const seen=new Set();

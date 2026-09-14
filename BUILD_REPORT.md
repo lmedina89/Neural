@@ -1,12 +1,12 @@
-# MicroMind v0.1.0.1 — Learning Stability & Best-Brain Protection
+# MicroMind v0.1.0.1.1 — Extended Checkpoint History Hotfix
 
-**Build marker:** `LEARNSTAB-0101`
+**Build marker:** `HISTCONT-01011`
 
-**Baseline:** v0.1.0 `LEARNLAB-010`
+**Baseline:** unreleased v0.1.0.1 `LEARNSTAB-0101`, itself built from v0.1.0 `LEARNLAB-010`
 
 ## Why this update exists
 
-Physical iPhone testing showed genuine learning but also a non-monotonic training failure: a ~500k-step historical brain outperformed the ~600k-step Latest policy on held-out worlds. v0.1.0.1 treats that as a learning-system observation, not something to hide.
+Physical iPhone testing showed genuine learning but also a non-monotonic training failure: a ~500k-step historical brain outperformed the ~600k-step Latest policy on held-out worlds. the stabilization line treats that as a learning-system observation, not something to hide.
 
 ## Implemented
 
@@ -32,7 +32,7 @@ Physical iPhone testing showed genuine learning but also a non-monotonic trainin
 
 ## Automated verification
 
-`npm test`: **21/21 PASS**
+`npm test`: **23/23 PASS**
 
 Coverage includes:
 
@@ -51,6 +51,8 @@ Coverage includes:
 - schema-1 migration
 - legacy long-run pre-resume validation
 - UI control presence
+- checkpoint scheduling beyond 1M
+- long-run migration without fabricated backfill
 
 All JS/MJS files pass `node --check`.
 
@@ -80,5 +82,16 @@ Checkpoint schema advances from 1 to 2 internally. v0.1.0 schema-1 saves remain 
 - Recurrent state still uses stop-gradient sample updates rather than truncated BPTT.
 - Validation is a small fixed suite; Best means “best under this protocol,” not universally best.
 - Automatic validation is synchronous and can cause a brief training/UI pause at infrequent validation points; physical iPhone timing should be checked.
-- PPO can still regress. v0.1.0.1 preserves and exposes the regression rather than claiming to eliminate catastrophic forgetting.
+- PPO can still regress. v0.1.0.1.1 preserves and exposes the regression rather than claiming to eliminate catastrophic forgetting.
 - Physical iPhone testing is required before this becomes the accepted baseline.
+
+
+## v0.1.0.1.1 checkpoint-history correction
+
+Physical testing also exposed that the historical milestone schedule stopped at 1,000,000 steps. Training itself did not stop; only historical policy capture did. This hotfix:
+
+- continues milestone capture indefinitely using an adaptive sparse schedule
+- prevents fake backfilling when loading an old run already beyond 1M
+- captures the exact loaded legacy brain as a migration snapshot
+- keeps early anchor brains visible while Compare Brains also shows recent milestones
+- leaves model architecture, PPO hyperparameters, rewards, curriculum logic, validation logic, physics, and checkpoint schema unchanged
