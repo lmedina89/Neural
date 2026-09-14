@@ -1,10 +1,10 @@
-# MicroMind v0.1.0.1.1 — Extended Checkpoint History Hotfix
+# MicroMind v0.1.0.1.2 — Recovery-Safe Save Slots Hotfix
 
-**Build:** `HISTCONT-01011`
+**Build:** `SAVEREC-01012`
 
 MicroMind is a browser-based miniature reinforcement-learning laboratory. A small recurrent actor-critic learns to forage, conserve energy, and avoid hazards in deterministic procedurally generated worlds. The world, neural activations, learned weights, policy probabilities, recurrent state, value estimate, rewards, validation history, and historical brains are exposed for inspection.
 
-v0.1.0.1.1 contains the full v0.1.0.1 stabilization update plus a narrowly scoped historical-checkpoint continuation hotfix. It is built for direct upgrade from v0.1.0. It does not add curiosity or a world model. It protects good policies from being lost silently during later PPO training and makes the controls easier to understand on mobile.
+v0.1.0.1.2 contains the full v0.1.0.1 stabilization update and v0.1.0.1.1 extended-history hotfix, plus a narrowly scoped recovery-safe save-slot fix. It is built for direct upgrade from v0.1.0. It does not add curiosity or a world model. It protects good policies from being lost silently during later PPO training and makes the controls easier to understand on mobile.
 
 ## Run
 
@@ -38,7 +38,7 @@ The best validation result for each curriculum protocol is preserved with:
 
 A worse Latest policy never overwrites that protected brain. **Restore Best** is explicit and never automatic.
 
-Each automatic validation also writes an `autosave` checkpoint to IndexedDB. **Load** chooses the newest of the manual `latest` save and the validation autosave.
+Each automatic validation writes an `autosave` checkpoint to IndexedDB. The UI now exposes **Manual Save** and **Validation Autosave** separately; it never silently chooses the newest one.
 
 ## Curriculum stability
 
@@ -53,7 +53,7 @@ Curriculum changes now use hysteresis:
 
 `10 observations → 24 tanh recurrent units → 7-action policy + scalar value`
 
-The recurrent state is real and feeds the next timestep. v0.1.0.1.1 deliberately preserves the compact stop-gradient recurrent PPO baseline rather than changing the learning algorithm at the same time as stabilization. See `docs/ARCHITECTURE.md`.
+The recurrent state is real and feeds the next timestep. v0.1.0.1.2 deliberately preserves the compact stop-gradient recurrent PPO baseline rather than changing the learning algorithm at the same time as stabilization. See `docs/ARCHITECTURE.md`.
 
 ## Data integrity
 
@@ -65,7 +65,7 @@ Canvas 2D is used instead of Three.js. Compute presets change training duty cycl
 
 ### Upgrading from v0.1.0
 
-Before replacing the old GitHub Pages build, press **Save** in the currently open v0.1.0 session if you want to preserve that in-memory run. v0.1.0.1.1 can load the existing schema-1 IndexedDB checkpoint and migrates it in memory without rewriting the old record until the next save/autosave.
+Before replacing the old GitHub Pages build, press **Save** in the currently open v0.1.0 session if you want to preserve that in-memory run. v0.1.0.1.2 can load the existing schema-1 IndexedDB checkpoint and migrates it in memory without rewriting the old record until the next save/autosave.
 
 
 ## Historical checkpoint continuation
@@ -79,3 +79,10 @@ The original v0.1.0 milestone list ended at 1,000,000 steps even though training
 - every 5M beyond 100M
 
 When a v0.1.0 save already beyond 1M is loaded, MicroMind does **not** fabricate missed checkpoints using the current brain. It records one honest migration snapshot at the exact loaded step count, then continues from the next future milestone. Compare Brains preserves early anchors while also showing recent historical brains, Latest, and Protected Best.
+
+
+## Recovery-safe save slots
+
+The Manual Save (`latest`) and Validation Autosave (`autosave`) are shown as separate storage slots with step count, episode count, schema, and saved timestamp. **Load Manual** and **Load Autosave** are explicit actions. Any load pauses training so the restored step count can be verified before resuming.
+
+Manual saves are protected against accidental rollback overwrite: if the browser already holds a higher-step Manual Save than the currently running brain, **Save Manual refuses to overwrite it**. This is specifically intended to protect a mature saved run when a page refresh starts a fresh in-memory brain. Automatic validation continues to update only the separate autosave slot.

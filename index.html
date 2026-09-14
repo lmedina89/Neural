@@ -14,7 +14,7 @@
         <div class="eyebrow">MICROMIND • LEARNING LABORATORY</div>
         <h1>Watch a tiny brain actually learn.</h1>
       </div>
-      <div class="build" id="buildTag">v0.1.0.1.1 • HISTCONT-01011</div>
+      <div class="build" id="buildTag">v0.1.0.1.2 • SAVEREC-01012</div>
     </header>
 
     <section class="controls" aria-label="Main controls">
@@ -36,11 +36,16 @@
           <option id="bestOption" value="best" disabled>Best (not validated yet)</option>
         </select>
       </label>
-      <button id="saveBtn" title="Save the full current training session to IndexedDB on this browser/device.">Save</button>
-      <button id="loadBtn" title="Load the newest manual save or automatic validation autosave from this browser/device.">Load</button>
+      <button id="saveBtn" title="Save the current session to the protected Manual Save slot. A higher-step manual save will not be overwritten by a lower-step brain.">Save Manual</button>
+      <button id="loadManualBtn" title="Load the Manual Save slot explicitly. Loading pauses training so you can verify the restored brain before resuming.">Load Manual</button>
+      <button id="loadAutosaveBtn" title="Load the automatic validation autosave explicitly. Loading pauses training so you can verify it before resuming.">Load Autosave</button>
       <button id="testBtn" title="Evaluate the current latest brain on held-out seeds that are never used for training.">Unseen Test</button>
       <button id="compareBtn" title="Compare historical checkpoint brains on the same held-out seeds.">Compare Brains</button>
       <button id="restoreBestBtn" title="Roll the trainable model and optimizer back to the best validated brain while keeping total experience steps monotonic." disabled>Restore Best</button>
+    </section>
+    <section class="saveSlotsPanel" aria-label="Stored checkpoint slots">
+      <div><b>MANUAL SAVE</b><span id="manualSlotInfo">Checking browser storage…</span></div>
+      <div><b>VALIDATION AUTOSAVE</b><span id="autosaveSlotInfo">Checking browser storage…</span></div>
     </section>
 
     <details class="helpPanel">
@@ -52,6 +57,8 @@
         <div><b>Probe</b><span>Freezes action. Move food/hazard/agent and inspect real policy changes.</span></div>
         <div><b>Compute</b><span>Eco reduces heat; Balanced is default; Max favors throughput.</span></div>
         <div><b>View Brain</b><span>Latest is the actively trained policy. Best is the highest-scoring automatic validation checkpoint for the current curriculum protocol.</span></div>
+        <div><b>Save Manual</b><span>Saves the current run to the manual slot. Recovery protection refuses to overwrite a manual brain with a lower-step brain.</span></div>
+        <div><b>Load Manual / Autosave</b><span>Each stored slot is shown separately with its step count and timestamp. Loading pauses training for verification.</span></div>
         <div><b>Unseen Test</b><span>Manual generalization test on a separate held-out seed domain.</span></div>
         <div><b>Compare Brains</b><span>Replays historical milestone brains against identical held-out worlds.</span></div>
         <div><b>Restore Best</b><span>Explicit rollback if Latest regresses. It restores model + optimizer; it never happens automatically.</span></div>
@@ -126,7 +133,7 @@
       <div id="resultsText" class="resultsText">No evaluation run yet.</div>
     </section>
 
-    <footer>MicroMind v0.1.0.1.1 uses a real recurrent actor-critic and PPO updates. Neural glow is instrumentation, not simulated “thought.”</footer>
+    <footer>MicroMind v0.1.0.1.2 uses a real recurrent actor-critic and PPO updates. Neural glow is instrumentation, not simulated “thought.”</footer>
   </main>
   <script type="module" src="./src/app/main.js"></script>
 </body>

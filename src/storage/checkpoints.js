@@ -25,6 +25,17 @@ export async function saveCheckpoint(snapshot, name = 'latest') {
   });
 }
 
+export async function saveCheckpointRecord(record) {
+  if (!record?.id || !record?.snapshot) throw new Error('Invalid checkpoint record');
+  const db = await openDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE, 'readwrite');
+    tx.objectStore(STORE).put(record);
+    tx.oncomplete = () => { db.close(); resolve(); };
+    tx.onerror = () => { const e = tx.error; db.close(); reject(e); };
+  });
+}
+
 export async function loadCheckpointRecord(name = 'latest') {
   const db = await openDb();
   return new Promise((resolve, reject) => {
@@ -40,8 +51,13 @@ export async function loadCheckpoint(name = 'latest') {
   return record?.snapshot || null;
 }
 
+export async function loadCheckpointRecords(names = ['latest', 'autosave']) {
+  const records = await Promise.all(names.map(loadCheckpointRecord));
+  return records.filter(Boolean);
+}
+
 export async function loadNewestCheckpoint(names = ['latest', 'autosave']) {
-  const records = (await Promise.all(names.map(loadCheckpointRecord))).filter(Boolean);
+  const records = await loadCheckpointRecords(names);
   if (!records.length) return null;
   records.sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
   return records[0];

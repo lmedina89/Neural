@@ -10,7 +10,7 @@ import { computeGAE } from '../src/ai/rollout.js';
 import { TrainingSession, nextHistoricalMilestoneAfter } from '../src/ai/session.js';
 import { evaluateCurriculumSuite } from '../src/evaluation/evaluator.js';
 
-test('release identity is v0.1.0.1.1 extended history hotfix',()=>{assert.equal(VERSION,'0.1.0.1.1');assert.equal(BUILD_MARKER,'HISTCONT-01011')});
+test('release identity is v0.1.0.1.2 recovery-safe save hotfix',()=>{assert.equal(VERSION,'0.1.0.1.2');assert.equal(BUILD_MARKER,'SAVEREC-01012')});
 test('PRNG is repeatable',()=>{const a=new PRNG(123),b=new PRNG(123);for(let i=0;i<100;i++)assert.equal(a.nextUint(),b.nextUint())});
 test('seed domains are separated',()=>{assert.notEqual(domainSeed('train',0),domainSeed('heldout:v1',0));assert.notEqual(domainSeed('validation:v1',0),domainSeed('heldout:v1',0));assert.notEqual(domainSeed('validation:v1',0),domainSeed('train',0))});
 test('world generation is deterministic',()=>{const a=new World(77,CURRICULUM[2]),b=new World(77,CURRICULUM[2]);assert.deepEqual(a.food,b.food);assert.deepEqual(a.hazards,b.hazards);assert.deepEqual(a.walls,b.walls);assert.deepEqual(Array.from(a.observe()),Array.from(b.observe()))});
@@ -31,7 +31,7 @@ test('v0.1.0 schema-1 checkpoint migrates without losing model and schedules val
 
 test('migrated legacy run validates its existing curriculum before further training',()=>{const a=new TrainingSession({seed:31,envCount:2,autoCurriculum:false});const snap=a.snapshot();const legacy={schema:1,seed:snap.seed,totalSteps:602496,totalEpisodes:1034,envSeedCursor:snap.envSeedCursor,curriculum:{stage:2,history:Array(40).fill(0.1)},model:snap.model,optimizer:snap.optimizer,metrics:[],milestones:snap.milestones};const b=new TrainingSession({seed:99,envCount:2,autoCurriculum:true});b.restore(legacy);b.trainRollout(1);assert.ok(b.validationHistory.length>=1);assert.equal(b.validationHistory[0].validation.maxStage,2);assert.ok(b.bestBrains[b.validationHistory[0].validation.protocol]);});
 test('reward is decomposed into finite named components',()=>{const w=new World(12345,CURRICULUM[1]);const r=w.step(1);const parts=r.info.rewardParts;for(const k of ['survival','energy','wall','food','hazard','approach','death'])assert.ok(Number.isFinite(parts[k]),k)});
-test('mobile help and best-brain controls are present in static UI',async()=>{const html=await readFile(new URL('../index.html',import.meta.url),'utf8');for(const id of ['brainSource','bestOption','restoreBestBtn','latestValidation','bestValidation'])assert.match(html,new RegExp(`id="${id}"`));assert.match(html,/What do the controls and numbers mean\?/)});
+test('mobile help and best-brain controls are present in static UI',async()=>{const html=await readFile(new URL('../index.html',import.meta.url),'utf8');for(const id of ['brainSource','bestOption','restoreBestBtn','latestValidation','bestValidation','manualSlotInfo','autosaveSlotInfo','loadManualBtn','loadAutosaveBtn'])assert.match(html,new RegExp(`id="${id}"`));assert.match(html,/What do the controls and numbers mean\?/)});
 
 test('historical milestone schedule continues beyond one million steps',()=>{
   assert.equal(nextHistoricalMilestoneAfter(1_000_000),1_250_000);
@@ -53,4 +53,27 @@ test('legacy long-run migration snapshots the exact loaded brain and does not ba
   assert.ok(b.milestones.has(steps));
   assert.equal(b.milestones.has(1_250_000),false);
   assert.equal(b.milestones.has(1_500_000),false);
+});
+
+
+test('recovery-safe UI exposes explicit manual and autosave loading instead of newest-wins loading',async()=>{
+  const html=await readFile(new URL('../index.html',import.meta.url),'utf8');
+  const main=await readFile(new URL('../src/app/main.js',import.meta.url),'utf8');
+  assert.match(html,/Load Manual/);
+  assert.match(html,/Load Autosave/);
+  assert.doesNotMatch(main,/loadNewestCheckpoint/);
+  assert.match(main,/loadCheckpointRecord\('latest'\)/);
+  assert.match(main,/loadCheckpointRecord\('autosave'\)/);
+});
+
+test('manual save recovery guard refuses lower-step overwrite',async()=>{
+  const main=await readFile(new URL('../src/app/main.js',import.meta.url),'utf8');
+  assert.match(main,/storedSteps>session\.totalSteps/);
+  assert.match(main,/this lower-step brain was NOT allowed to overwrite it/);
+});
+
+test('explicit checkpoint restore pauses training for verification',async()=>{
+  const main=await readFile(new URL('../src/app/main.js',import.meta.url),'utf8');
+  assert.match(main,/paused=true;el\.pause\.textContent='Resume'/);
+  assert.match(main,/Training is PAUSED so you can verify it/);
 });

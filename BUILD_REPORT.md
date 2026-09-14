@@ -1,8 +1,8 @@
-# MicroMind v0.1.0.1.1 — Extended Checkpoint History Hotfix
+# MicroMind v0.1.0.1.2 — Recovery-Safe Save Slots Hotfix
 
-**Build marker:** `HISTCONT-01011`
+**Build marker:** `SAVEREC-01012`
 
-**Baseline:** unreleased v0.1.0.1 `LEARNSTAB-0101`, itself built from v0.1.0 `LEARNLAB-010`
+**Baseline:** exact v0.1.0.1.1 `HISTCONT-01011`, itself containing v0.1.0.1 stabilization and v0.1.0 foundation
 
 ## Why this update exists
 
@@ -18,7 +18,7 @@ Physical iPhone testing showed genuine learning but also a non-monotonic trainin
 - **Latest / Best** selection in Observe and Probe
 - periodic validation plus validation on curriculum transitions
 - automatic IndexedDB autosave after every automatic validation
-- Load chooses the newest manual or validation autosave
+- manual and validation-autosave slots are displayed and loaded explicitly; no newest-wins ambiguity
 - curriculum demotion as well as promotion
 - promotion/demotion hysteresis and transition cooldown
 - stale episodes from old curriculum stages cannot vote on a new stage
@@ -32,7 +32,7 @@ Physical iPhone testing showed genuine learning but also a non-monotonic trainin
 
 ## Automated verification
 
-`npm test`: **23/23 PASS**
+`npm test`: **26/26 PASS**
 
 Coverage includes:
 
@@ -82,7 +82,7 @@ Checkpoint schema advances from 1 to 2 internally. v0.1.0 schema-1 saves remain 
 - Recurrent state still uses stop-gradient sample updates rather than truncated BPTT.
 - Validation is a small fixed suite; Best means “best under this protocol,” not universally best.
 - Automatic validation is synchronous and can cause a brief training/UI pause at infrequent validation points; physical iPhone timing should be checked.
-- PPO can still regress. v0.1.0.1.1 preserves and exposes the regression rather than claiming to eliminate catastrophic forgetting.
+- PPO can still regress. v0.1.0.1.2 preserves and exposes the regression rather than claiming to eliminate catastrophic forgetting.
 - Physical iPhone testing is required before this becomes the accepted baseline.
 
 
@@ -95,3 +95,17 @@ Physical testing also exposed that the historical milestone schedule stopped at 
 - captures the exact loaded legacy brain as a migration snapshot
 - keeps early anchor brains visible while Compare Brains also shows recent milestones
 - leaves model architecture, PPO hyperparameters, rewards, curriculum logic, validation logic, physics, and checkpoint schema unchanged
+
+
+## v0.1.0.1.2 recovery correction
+
+Physical testing showed a refresh could start a new in-memory brain while the older high-step Manual Save still existed in IndexedDB. The prior single **Load** action selected the newest timestamp, which could make a newer low-step validation autosave obscure the older mature Manual Save. This hotfix:
+
+- exposes Manual Save and Validation Autosave separately
+- shows each slot's exact training steps, episodes, schema, and save time before loading
+- pauses training after any restore so the user can verify the recovered checkpoint
+- prevents a lower-step current brain from overwriting a higher-step Manual Save
+- leaves the IndexedDB database name, object store, keys (`latest`, `autosave`), checkpoint schema, model, PPO, reward system, curriculum, and physics unchanged
+- includes the extended post-1M historical checkpoint schedule from v0.1.0.1.1
+
+The hotfix cannot guarantee an old manual checkpoint exists until the deployed browser reads its IndexedDB. It is designed to inspect and recover it safely if it is still present.

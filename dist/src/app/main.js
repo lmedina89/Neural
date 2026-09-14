@@ -5,7 +5,7 @@ import { evaluateModel } from '../evaluation/evaluator.js';
 import { CURRICULUM } from '../sim/curriculum.js';
 import { World } from '../sim/world.js';
 import { domainSeed, PRNG } from '../utils/prng.js';
-import { saveCheckpoint, loadNewestCheckpoint } from '../storage/checkpoints.js';
+import { saveCheckpoint, loadCheckpointRecord } from '../storage/checkpoints.js';
 import { WorldRenderer } from '../visualization/worldRenderer.js';
 import { NeuralRenderer } from '../visualization/neuralRenderer.js';
 import { ChartRenderer } from '../visualization/chartRenderer.js';
@@ -14,12 +14,13 @@ const $ = id => document.getElementById(id);
 const el = {
   newBrain:$('newBrain'), learn:$('learnBtn'), observe:$('observeBtn'), probe:$('probeBtn'), pause:$('pauseBtn'),
   budget:$('budgetSelect'), brainSource:$('brainSource'), bestOption:$('bestOption'), restoreBest:$('restoreBestBtn'),
-  save:$('saveBtn'), load:$('loadBtn'), test:$('testBtn'), compare:$('compareBtn'),
+  save:$('saveBtn'), loadManual:$('loadManualBtn'), loadAutosave:$('loadAutosaveBtn'), test:$('testBtn'), compare:$('compareBtn'),
   mode:$('modeBadge'), status:$('statusText'), world:$('worldCanvas'), brain:$('brainCanvas'), chart:$('chartCanvas'),
   worldMeta:$('worldMeta'), probeTools:$('probeTools'), brainView:$('brainView'), viewBrainBadge:$('viewBrainBadge'), inspect:$('inspectText'),
   steps:$('stepsVal'), episodes:$('episodesVal'), ret:$('returnVal'), food:$('foodVal'), entropy:$('entropyVal'), speed:$('speedVal'),
   paramCount:$('paramCount'), actionBars:$('actionBars'), energy:$('energyBar'), energyText:$('energyText'), curriculum:$('curriculumText'),
-  rewardParts:$('rewardParts'), value:$('valueText'), results:$('resultsText'), latestValidation:$('latestValidation'), bestValidation:$('bestValidation')
+  rewardParts:$('rewardParts'), value:$('valueText'), results:$('resultsText'), latestValidation:$('latestValidation'), bestValidation:$('bestValidation'),
+  manualSlot:$('manualSlotInfo'), autosaveSlot:$('autosaveSlotInfo')
 };
 $('buildTag').textContent=`v${VERSION} • ${BUILD_MARKER}`;
 
@@ -34,6 +35,56 @@ const worldRenderer=new WorldRenderer(el.world), neuralRenderer=new NeuralRender
 
 function createViewWorld(){return new World(domainSeed('observe:v2',viewSeedIndex++),session.curriculum.current())}
 function setStatus(s){el.status.textContent=s}
+function formatSavedTime(ms){
+  if(!Number.isFinite(ms))return 'unknown time';
+  try{return new Date(ms).toLocaleString()}catch{return 'unknown time'}
+}
+function describeCheckpointRecord(record){
+  if(!record?.snapshot)return 'Empty';
+  const steps=Number(record.snapshot.totalSteps||0).toLocaleString();
+  const episodes=Number(record.snapshot.totalEpisodes||0).toLocaleString();
+  const schema=record.snapshot.schema??'?';
+  return `${steps} steps • ${episodes} episodes • schema ${schema} • ${formatSavedTime(record.savedAt)}`;
+}
+async function refreshSaveSlots(){
+  try{
+    const [manual,autosave]=await Promise.all([loadCheckpointRecord('latest'),loadCheckpointRecord('autosave')]);
+    el.manualSlot.textContent=describeCheckpointRecord(manual);
+    el.autosaveSlot.textContent=describeCheckpointRecord(autosave);
+    el.loadManual.disabled=!manual;
+    el.loadAutosave.disabled=!autosave;
+    return {manual,autosave};
+  }catch(err){
+    el.manualSlot.textContent=`Storage error: ${err.message}`;
+    el.autosaveSlot.textContent='Unavailable';
+    el.loadManual.disabled=true;el.loadAutosave.disabled=true;
+    return {manual:null,autosave:null,error:err};
+  }
+}
+async function restoreCheckpointRecord(record,label){
+  const cp=record?.snapshot;
+  if(!cp){setStatus(`No ${label.toLowerCase()} found.`);return false}
+  paused=true;el.pause.textContent='Resume';
+  session.restore(cp);bestModelCache=null;bestModelCacheSteps=null;viewSeedIndex=0;el.brainSource.value='latest';
+  resetViewState();updateUI();await refreshSaveSlots();
+  const migration=cp.schema===1?' Legacy v0.1.0 checkpoint migrated in memory; its exact loaded policy is preserved as a migration milestone.':'';
+  setStatus(`${label} restored at ${session.totalSteps.toLocaleString()} steps. Training is PAUSED so you can verify it before pressing Resume/Learn.${migration}`);
+  return true;
+}
+async function saveManualSafely(){
+  try{
+    const existing=await loadCheckpointRecord('latest');
+    const storedSteps=Number(existing?.snapshot?.totalSteps||0);
+    if(existing&&storedSteps>session.totalSteps){
+      setStatus(`Manual save protected: stored brain has ${storedSteps.toLocaleString()} steps, current brain has ${session.totalSteps.toLocaleString()}. Load Manual first; this lower-step brain was NOT allowed to overwrite it.`);
+      await refreshSaveSlots();
+      return;
+    }
+    await saveCheckpoint(session.snapshot(),'latest');
+    await refreshSaveSlots();
+    setStatus(`Manual checkpoint saved at ${session.totalSteps.toLocaleString()} steps. Protected-best data included.`);
+  }catch(e){setStatus(`Save failed: ${e.message}`)}
+}
 function selectedViewModel(){
   if(mode==='LEARN'||el.brainSource.value!=='best'||!session.bestBrain?.model)return session.model;
   if(!bestModelCache||bestModelCacheSteps!==session.bestBrain.savedAtSteps){
@@ -73,7 +124,7 @@ async function trainTick(){
       if(v.regression)setStatus(`Validation regression detected: latest ${v.validation.score.toFixed(2)} vs protected best ${v.bestScore.toFixed(2)}. Best brain preserved.`);
       else if(v.improved)setStatus(`New protected best brain at ${session.bestBrain.savedAtSteps.toLocaleString()} steps • validation ${v.validation.score.toFixed(2)}.`);
       else setStatus(`Validation complete: ${v.validation.score.toFixed(2)} • protected best ${v.bestScore.toFixed(2)}.`);
-      try{await saveCheckpoint(session.snapshot(),'autosave')}catch(saveErr){console.warn('Validation autosave failed',saveErr);setStatus(`${el.status.textContent} Autosave failed: ${saveErr.message}`)}
+      try{await saveCheckpoint(session.snapshot(),'autosave');await refreshSaveSlots()}catch(saveErr){console.warn('Validation autosave failed',saveErr);setStatus(`${el.status.textContent} Autosave failed: ${saveErr.message}`)}
     } else if(result.curriculumEvent){
       const e=result.curriculumEvent;setStatus(`Curriculum ${e.reason}: ${CURRICULUM[e.from].name} → ${CURRICULUM[e.to].name}.`);
     }
@@ -162,11 +213,12 @@ el.learn.addEventListener('click',()=>setMode('LEARN'));el.observe.addEventListe
 el.pause.addEventListener('click',()=>{paused=!paused;el.pause.textContent=paused?'Resume':'Pause';setStatus(paused?'Paused. Neural state remains inspectable.':'Resumed.')});
 el.brainView.addEventListener('change',()=>{neuralRenderer.mode=el.brainView.value});
 el.brainSource.addEventListener('change',()=>{if(el.brainSource.value==='best'&&!session.bestBrain){el.brainSource.value='latest';return}if(mode!=='LEARN')resetViewState();el.viewBrainBadge.textContent=selectedSourceLabel();setStatus(mode==='LEARN'?'View Brain selection applies in Observe/Probe; Learn always shows/trains Latest.':`Now inspecting ${selectedSourceLabel().toLowerCase()} brain.`)});
-el.save.addEventListener('click',async()=>{try{await saveCheckpoint(session.snapshot());setStatus('Checkpoint saved to IndexedDB. Protected-best data included.')}catch(e){setStatus(`Save failed: ${e.message}`)}});
-el.load.addEventListener('click',async()=>{try{const record=await loadNewestCheckpoint();const cp=record?.snapshot;if(!cp){setStatus('No saved checkpoint or validation autosave found.');return}session.restore(cp);bestModelCache=null;bestModelCacheSteps=null;viewSeedIndex=0;el.brainSource.value='latest';resetViewState();updateUI();const source=record.id==='autosave'?'validation autosave':'manual save';setStatus(cp.schema===1?`v0.1.0 ${source} restored. Automatic validation will establish a protected best when learning resumes.`:`Newest ${source} restored.`)}catch(e){setStatus(`Load failed: ${e.message}`)}});
+el.save.addEventListener('click',saveManualSafely);
+el.loadManual.addEventListener('click',async()=>{try{await restoreCheckpointRecord(await loadCheckpointRecord('latest'),'Manual Save')}catch(e){setStatus(`Manual load failed: ${e.message}`)}});
+el.loadAutosave.addEventListener('click',async()=>{try{await restoreCheckpointRecord(await loadCheckpointRecord('autosave'),'Validation Autosave')}catch(e){setStatus(`Autosave load failed: ${e.message}`)}});
 el.restoreBest.addEventListener('click',()=>{if(!session.bestBrain)return;const source=session.bestBrain.savedAtSteps;if(!confirm(`Restore the trainable policy + optimizer from the protected best at ${source.toLocaleString()} steps? Total experience steps will remain ${session.totalSteps.toLocaleString()} for an honest training history.`))return;session.restoreBest();bestModelCache=null;bestModelCacheSteps=null;el.brainSource.value='latest';resetViewState();updateUI();setStatus(`Latest policy restored from protected best @ ${source.toLocaleString()} steps. Training can resume from that brain.`)});
 el.test.addEventListener('click',runUnseen);el.compare.addEventListener('click',compareBrains);
 el.brain.addEventListener('pointerdown',e=>{const text=neuralRenderer.inspectAt(e.clientX,e.clientY);if(text)el.inspect.textContent=text});
 el.world.addEventListener('pointerdown',e=>{if(mode!=='PROBE')return;const r=el.world.getBoundingClientRect(),x=Math.max(.03,Math.min(.97,(e.clientX-r.left)/r.width)),y=Math.max(.03,Math.min(.97,(e.clientY-r.top)/r.height));const tool=document.querySelector('input[name="probeTool"]:checked')?.value||'food';if(tool==='food'&&viewWorld.food.length){viewWorld.food[0].x=x;viewWorld.food[0].y=y;viewWorld.prevFoodDist=viewWorld.nearestFoodDistance()}else if(tool==='hazard'){if(viewWorld.hazards.length){viewWorld.hazards[0].x=x;viewWorld.hazards[0].y=y}else viewWorld.hazards.push({x,y,r:CONFIG.world.hazardRadius})}else{viewWorld.agent.x=x;viewWorld.agent.y=y;viewWorld.agent.vx=0;viewWorld.agent.vy=0}updateProbe();setStatus(`Probe moved ${tool}. ${selectedSourceLabel()} policy outputs updated without taking an action.`)});
 
-updateUI();setMode('LEARN');requestAnimationFrame(frame);trainTick();
+updateUI();setMode('LEARN');requestAnimationFrame(frame);refreshSaveSlots().then(({manual})=>{if(manual?.snapshot?.totalSteps>session.totalSteps)setStatus(`Stored Manual Save detected at ${Number(manual.snapshot.totalSteps).toLocaleString()} steps. It is protected from lower-step overwrite; use Load Manual to recover it.`)});trainTick();
