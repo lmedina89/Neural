@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#050a10">
+  <title>MicroMind — Learning Laboratory</title>
+  <link rel="stylesheet" href="./styles.css">
+</head>
+<body>
+  <main id="app">
+    <header class="topbar">
+      <div>
+        <div class="eyebrow">MICROMIND • LEARNING LABORATORY</div>
+        <h1>Watch a tiny brain actually learn.</h1>
+      </div>
+      <div class="build" id="buildTag">v0.1.0 • LEARNLAB-010</div>
+    </header>
+
+    <section class="controls" aria-label="Main controls">
+      <button id="newBrain">New Brain</button>
+      <button id="learnBtn" class="primary">Learn</button>
+      <button id="observeBtn">Observe</button>
+      <button id="probeBtn">Probe</button>
+      <button id="pauseBtn">Pause</button>
+      <label class="selectLabel">Compute
+        <select id="budgetSelect">
+          <option value="eco">Eco</option>
+          <option value="balanced" selected>Balanced</option>
+          <option value="max">Max</option>
+        </select>
+      </label>
+      <button id="saveBtn">Save</button>
+      <button id="loadBtn">Load</button>
+      <button id="testBtn">Unseen Test</button>
+      <button id="compareBtn">Compare Brains</button>
+    </section>
+
+    <section class="statusline" aria-live="polite">
+      <span id="modeBadge">LEARN</span>
+      <span id="statusText">Ready.</span>
+    </section>
+
+    <section class="workspace">
+      <article class="panel worldPanel">
+        <div class="panelHead"><strong>WORLD</strong><span id="worldMeta">seed —</span></div>
+        <canvas id="worldCanvas" aria-label="Agent world"></canvas>
+        <div class="probeTools" id="probeTools" hidden>
+          <span>Tap the world to move:</span>
+          <label><input type="radio" name="probeTool" value="food" checked> food</label>
+          <label><input type="radio" name="probeTool" value="hazard"> hazard</label>
+          <label><input type="radio" name="probeTool" value="agent"> agent</label>
+        </div>
+      </article>
+
+      <article class="panel brainPanel">
+        <div class="panelHead">
+          <strong>LIVE BRAIN</strong>
+          <select id="brainView" aria-label="Brain visualization mode">
+            <option value="ACTIVE">Active</option>
+            <option value="WEIGHTS">Weights</option>
+            <option value="STRONGEST">Strongest</option>
+          </select>
+        </div>
+        <canvas id="brainCanvas" aria-label="Neural network visualization"></canvas>
+        <div class="inspect" id="inspectText">Tap a neuron to inspect its real runtime value.</div>
+      </article>
+    </section>
+
+    <section class="metricsGrid">
+      <article class="panel metricPanel">
+        <div class="panelHead"><strong>TRAINING</strong><span id="paramCount">— params</span></div>
+        <div class="numbers">
+          <div><span>steps</span><b id="stepsVal">0</b></div>
+          <div><span>episodes</span><b id="episodesVal">0</b></div>
+          <div><span>return</span><b id="returnVal">0.00</b></div>
+          <div><span>food</span><b id="foodVal">0.00</b></div>
+          <div><span>entropy</span><b id="entropyVal">—</b></div>
+          <div><span>steps/sec</span><b id="speedVal">—</b></div>
+        </div>
+        <canvas id="chartCanvas" aria-label="Training return chart"></canvas>
+      </article>
+
+      <article class="panel decisionPanel">
+        <div class="panelHead"><strong>DECISION</strong><span id="valueText">value —</span></div>
+        <div id="actionBars" class="actionBars"></div>
+        <div class="rewardRow"><span>energy</span><progress id="energyBar" max="1" value="1"></progress><span id="energyText">100%</span></div>
+        <div class="rewardRow"><span>curriculum</span><b id="curriculumText">Motor Nursery</b></div>
+        <div class="rewardParts" id="rewardParts">reward components —</div>
+      </article>
+    </section>
+
+    <section class="panel resultsPanel">
+      <div class="panelHead"><strong>EVALUATION / CHECKPOINTS</strong><span>held-out seeds never train the agent</span></div>
+      <div id="resultsText" class="resultsText">No evaluation run yet.</div>
+    </section>
+
+    <footer>MicroMind v0.1.0 uses a real recurrent actor-critic and PPO updates. Neural glow is instrumentation, not simulated “thought.”</footer>
+  </main>
+  <script type="module" src="./src/app/main.js"></script>
+</body>
+</html>
