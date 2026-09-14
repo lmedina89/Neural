@@ -25,12 +25,24 @@ export async function saveCheckpoint(snapshot, name = 'latest') {
   });
 }
 
-export async function loadCheckpoint(name = 'latest') {
+export async function loadCheckpointRecord(name = 'latest') {
   const db = await openDb();
   return new Promise((resolve, reject) => {
     const tx = db.transaction(STORE, 'readonly');
     const req = tx.objectStore(STORE).get(name);
-    req.onsuccess = () => { db.close(); resolve(req.result?.snapshot || null); };
+    req.onsuccess = () => { db.close(); resolve(req.result || null); };
     req.onerror = () => { const e = req.error; db.close(); reject(e); };
   });
+}
+
+export async function loadCheckpoint(name = 'latest') {
+  const record = await loadCheckpointRecord(name);
+  return record?.snapshot || null;
+}
+
+export async function loadNewestCheckpoint(names = ['latest', 'autosave']) {
+  const records = (await Promise.all(names.map(loadCheckpointRecord))).filter(Boolean);
+  if (!records.length) return null;
+  records.sort((a, b) => (b.savedAt || 0) - (a.savedAt || 0));
+  return records[0];
 }

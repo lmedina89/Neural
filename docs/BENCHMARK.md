@@ -1,23 +1,24 @@
-# Controlled learning benchmark — v0.1.0 LEARNLAB-010
+# Controlled learning/stability benchmark — v0.1.0.1 LEARNSTAB-0101
 
 A reproducible smoke benchmark was run with:
 
 - brain seed: `424242`
 - curriculum: Stage 0 / Motor Nursery (automatic curriculum disabled for the benchmark)
 - training environments: 8
-- training steps: 40,192
-- held-out evaluation episodes: 24
+- training steps: 60,160
+- held-out evaluation episodes: 32
 - held-out seed domain: `heldout:v1`
-- evaluation policy: stochastic categorical policy with a deterministic per-seed RNG, so repeated benchmark runs are reproducible
+- automatic validation domain: `validation:v1`
+- evaluation policy: stochastic categorical policy with deterministic per-seed RNG
 
 ## Results
 
-| Metric | Before training | After training |
-| --- | ---: | ---: |
-| Mean held-out return | -9.775 | 2.189 |
-| Mean held-out food collected | 0.083 | 2.292 |
-| Mean held-out episode steps | 474.0 | 682.5 |
+| Policy | Source step | Mean held-out return | Food | Survival |
+| --- | ---: | ---: | ---: | ---: |
+| Initial | 0 | -9.674 | 0.094 | 0.0% |
+| Latest after training | 60,160 | -0.761 | 0.156 | 15.6% |
+| Protected Best | 50,176 | **1.211** | **1.344** | **78.1%** |
 
-Training metrics during the same run reached a recent mean return of `2.271`, mean food `2.525`, and policy entropy `1.184` at 40,192 steps.
+Automatic validation selected new bests at 10,240 steps (validation score `0.721`) and 50,176 steps (`1.443`). The later 60,160-step policy had regressed substantially on the independent held-out set, while the 50,176-step protected policy retained strong performance.
 
-This benchmark is intentionally small. It demonstrates that the learning loop changes the policy and improves behavior on deterministic held-out worlds not used for training. It is not evidence of general intelligence.
+This is exactly the failure mode v0.1.0.1 is designed to expose and protect against. It does **not** prove the validation score will always predict held-out performance, and it is not evidence of general intelligence. It does demonstrate that the protected-best mechanism can preserve a materially better policy when later PPO updates degrade the live learner.

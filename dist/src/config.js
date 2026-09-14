@@ -1,5 +1,5 @@
-export const VERSION = '0.1.0';
-export const BUILD_MARKER = 'LEARNLAB-010';
+export const VERSION = '0.1.0.1';
+export const BUILD_MARKER = 'LEARNSTAB-0101';
 
 export const CONFIG = Object.freeze({
   world: {
@@ -56,10 +56,26 @@ export const CONFIG = Object.freeze({
     epochs: 3,
     minibatchSize: 64,
   },
+  curriculum: {
+    historySize: 48,
+    minSamples: 32,
+    transitionCooldownEpisodes: 64,
+    promoteThreshold: 0.72,
+    demoteThreshold: 0.18,
+  },
+  validation: {
+    seedBase: 'validation:v1',
+    episodesPerStage: 8,
+    regressionTolerance: 0.35,
+    improvementEpsilon: 0.01,
+    schedule: [10000, 50000, 100000, 250000, 500000, 750000, 1000000],
+    intervalAfterSchedule: 250000,
+  },
   runtime: {
     rolloutSteps: 64,
     trainEnvs: 8,
-    evalEpisodes: 18,
+    evalEpisodes: 32,
+    compareEpisodes: 24,
     chartPoints: 240,
   },
 });

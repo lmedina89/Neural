@@ -1,20 +1,54 @@
 import { TrainingSession } from '../src/ai/session.js';
+import { RecurrentActorCritic } from '../src/ai/model.js';
 import { evaluateModel } from '../src/evaluation/evaluator.js';
 import { CURRICULUM } from '../src/sim/curriculum.js';
 
 const session = new TrainingSession({ seed: 424242, envCount: 8, autoCurriculum: false });
 const stage = CURRICULUM[0];
-const initial = evaluateModel(session.model, stage, { episodes: 24, seedBase: 'heldout:v1', deterministic: false });
-console.log('initial', {return: initial.meanReturn.toFixed(3), food: initial.meanFood.toFixed(3), steps: initial.meanSteps.toFixed(1)});
+const evalOptions = { episodes: 32, seedBase: 'heldout:v1', deterministic: false };
+const initial = evaluateModel(session.model, stage, evalOptions);
+console.log('initial', summary(initial));
+
 const target = Number(process.env.STEPS || 60000);
 let nextPrint = 10000;
 while (session.totalSteps < target) {
-  const { metric } = session.trainRollout(32);
+  const { metric, validation } = session.trainRollout(32);
   if (session.totalSteps >= nextPrint) {
-    console.log('train', session.totalSteps, {return: metric.meanReturn.toFixed(3), food: metric.meanFood.toFixed(3), entropy: metric.entropy.toFixed(3)});
+    console.log('train', session.totalSteps, { return: metric.meanReturn.toFixed(3), food: metric.meanFood.toFixed(3), entropy: metric.entropy.toFixed(3) });
     nextPrint += 10000;
   }
+  if (validation) console.log('validation', { steps: validation.steps, score: validation.validation.score.toFixed(3), improved: validation.improved, regression: validation.regression, best: validation.bestScore.toFixed(3) });
 }
-const final = evaluateModel(session.model, stage, { episodes: 24, seedBase: 'heldout:v1', deterministic: false });
-console.log('final', {return: final.meanReturn.toFixed(3), food: final.meanFood.toFixed(3), steps: final.meanSteps.toFixed(1)});
-console.log(JSON.stringify({initial, final, steps: session.totalSteps}, null, 2));
+
+const latest = evaluateModel(session.model, stage, evalOptions);
+let protectedBest = null;
+if (session.bestBrain?.model) {
+  const model = new RecurrentActorCritic(1);
+  model.restore(session.bestBrain.model);
+  protectedBest = evaluateModel(model, stage, evalOptions);
+}
+
+console.log('latest', summary(latest));
+console.log('protected best', { checkpointSteps: session.bestBrain?.savedAtSteps ?? null, ...summary(protectedBest) });
+
+const report = {
+  trainingSteps: session.totalSteps,
+  initial: summaryNumbers(initial),
+  latest: summaryNumbers(latest),
+  protectedBest: protectedBest ? { steps: session.bestBrain.savedAtSteps, ...summaryNumbers(protectedBest) } : null,
+  validations: session.validationHistory.map(v => ({ steps: v.steps, score: v.validation.score, improved: v.improved, regression: v.regression, bestScore: v.bestScore })),
+};
+console.log('summary-json', JSON.stringify(report));
+
+if (!protectedBest || protectedBest.meanReturn <= initial.meanReturn) {
+  console.error('Benchmark failed: protected best did not improve held-out return over the initial policy.');
+  process.exitCode = 1;
+}
+
+function summary(r) {
+  if (!r) return { return: '—', food: '—', survival: '—' };
+  return { return: r.meanReturn.toFixed(3), food: r.meanFood.toFixed(3), survival: `${(r.survivalRate * 100).toFixed(1)}%`, steps: r.meanSteps.toFixed(1) };
+}
+function summaryNumbers(r) {
+  return { meanReturn: r.meanReturn, meanFood: r.meanFood, survivalRate: r.survivalRate, meanSteps: r.meanSteps };
+}

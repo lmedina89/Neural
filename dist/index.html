@@ -14,27 +14,54 @@
         <div class="eyebrow">MICROMIND • LEARNING LABORATORY</div>
         <h1>Watch a tiny brain actually learn.</h1>
       </div>
-      <div class="build" id="buildTag">v0.1.0 • LEARNLAB-010</div>
+      <div class="build" id="buildTag">v0.1.0.1 • LEARNSTAB-0101</div>
     </header>
 
     <section class="controls" aria-label="Main controls">
-      <button id="newBrain">New Brain</button>
-      <button id="learnBtn" class="primary">Learn</button>
-      <button id="observeBtn">Observe</button>
-      <button id="probeBtn">Probe</button>
-      <button id="pauseBtn">Pause</button>
-      <label class="selectLabel">Compute
+      <button id="newBrain" title="Create a fresh randomly initialized brain. Unsaved progress is replaced.">New Brain</button>
+      <button id="learnBtn" class="primary" title="Train the latest brain with PPO in multiple procedural worlds.">Learn</button>
+      <button id="observeBtn" title="Watch Latest or Best brain act in a separate procedural world without training.">Observe</button>
+      <button id="probeBtn" title="Freeze the world and move stimuli to inspect how the selected brain responds.">Probe</button>
+      <button id="pauseBtn" title="Pause or resume the current mode.">Pause</button>
+      <label class="selectLabel" title="Controls training duty cycle and heat/load on the browser.">Compute
         <select id="budgetSelect">
           <option value="eco">Eco</option>
           <option value="balanced" selected>Balanced</option>
           <option value="max">Max</option>
         </select>
       </label>
-      <button id="saveBtn">Save</button>
-      <button id="loadBtn">Load</button>
-      <button id="testBtn">Unseen Test</button>
-      <button id="compareBtn">Compare Brains</button>
+      <label class="selectLabel" title="Choose which brain Observe/Probe uses. Learn always trains Latest.">View Brain
+        <select id="brainSource">
+          <option value="latest">Latest</option>
+          <option id="bestOption" value="best" disabled>Best (not validated yet)</option>
+        </select>
+      </label>
+      <button id="saveBtn" title="Save the full current training session to IndexedDB on this browser/device.">Save</button>
+      <button id="loadBtn" title="Load the newest manual save or automatic validation autosave from this browser/device.">Load</button>
+      <button id="testBtn" title="Evaluate the current latest brain on held-out seeds that are never used for training.">Unseen Test</button>
+      <button id="compareBtn" title="Compare historical checkpoint brains on the same held-out seeds.">Compare Brains</button>
+      <button id="restoreBestBtn" title="Roll the trainable model and optimizer back to the best validated brain while keeping total experience steps monotonic." disabled>Restore Best</button>
     </section>
+
+    <details class="helpPanel">
+      <summary>What do the controls and numbers mean?</summary>
+      <div class="helpGrid">
+        <div><b>New Brain</b><span>Fresh random network. Save first if you want to keep the current run.</span></div>
+        <div><b>Learn</b><span>Runs PPO training. The visible world is only one of several training environments.</span></div>
+        <div><b>Observe</b><span>Stops learning and watches the selected Latest/Best brain act at human speed.</span></div>
+        <div><b>Probe</b><span>Freezes action. Move food/hazard/agent and inspect real policy changes.</span></div>
+        <div><b>Compute</b><span>Eco reduces heat; Balanced is default; Max favors throughput.</span></div>
+        <div><b>View Brain</b><span>Latest is the actively trained policy. Best is the highest-scoring automatic validation checkpoint for the current curriculum protocol.</span></div>
+        <div><b>Unseen Test</b><span>Manual generalization test on a separate held-out seed domain.</span></div>
+        <div><b>Compare Brains</b><span>Replays historical milestone brains against identical held-out worlds.</span></div>
+        <div><b>Restore Best</b><span>Explicit rollback if Latest regresses. It restores model + optimizer; it never happens automatically.</span></div>
+        <div><b>Return</b><span>Recent average total reward. Higher is better, but reinforcement learning is noisy.</span></div>
+        <div><b>Food</b><span>Recent average resources collected per episode.</span></div>
+        <div><b>Entropy</b><span>Policy uncertainty/exploration. High means action probabilities are more spread out.</span></div>
+        <div><b>Value</b><span>The critic's estimate of expected future return from the current state.</span></div>
+        <div><b>Validation</b><span>Automatic fixed-seed check. A protected Best brain is only replaced when the new score is better. Each validation also creates a local autosave.</span></div>
+      </div>
+    </details>
 
     <section class="statusline" aria-live="polite">
       <span id="modeBadge">LEARN</span>
@@ -56,11 +83,11 @@
       <article class="panel brainPanel">
         <div class="panelHead">
           <strong>LIVE BRAIN</strong>
-          <select id="brainView" aria-label="Brain visualization mode">
+          <div class="brainHeadControls"><span id="viewBrainBadge">LATEST</span><select id="brainView" aria-label="Brain visualization mode">
             <option value="ACTIVE">Active</option>
             <option value="WEIGHTS">Weights</option>
             <option value="STRONGEST">Strongest</option>
-          </select>
+          </select></div>
         </div>
         <canvas id="brainCanvas" aria-label="Neural network visualization"></canvas>
         <div class="inspect" id="inspectText">Tap a neuron to inspect its real runtime value.</div>
@@ -79,6 +106,10 @@
           <div><span>steps/sec</span><b id="speedVal">—</b></div>
         </div>
         <canvas id="chartCanvas" aria-label="Training return chart"></canvas>
+        <div class="validationStrip">
+          <span>latest validation <b id="latestValidation">—</b></span>
+          <span>protected best <b id="bestValidation">—</b></span>
+        </div>
       </article>
 
       <article class="panel decisionPanel">
@@ -91,11 +122,11 @@
     </section>
 
     <section class="panel resultsPanel">
-      <div class="panelHead"><strong>EVALUATION / CHECKPOINTS</strong><span>held-out seeds never train the agent</span></div>
+      <div class="panelHead"><strong>EVALUATION / CHECKPOINTS</strong><span>validation + held-out seeds never train the agent</span></div>
       <div id="resultsText" class="resultsText">No evaluation run yet.</div>
     </section>
 
-    <footer>MicroMind v0.1.0 uses a real recurrent actor-critic and PPO updates. Neural glow is instrumentation, not simulated “thought.”</footer>
+    <footer>MicroMind v0.1.0.1 uses a real recurrent actor-critic and PPO updates. Neural glow is instrumentation, not simulated “thought.”</footer>
   </main>
   <script type="module" src="./src/app/main.js"></script>
 </body>

@@ -1,8 +1,10 @@
-# MicroMind v0.1.0 — Learning Laboratory Foundation
+# MicroMind v0.1.0.1 — Learning Stability & Best-Brain Protection
 
-**Build:** `LEARNLAB-010`
+**Build:** `LEARNSTAB-0101`
 
-MicroMind is a browser-based miniature reinforcement-learning laboratory. A small recurrent actor-critic learns to forage, conserve energy, and avoid hazards in deterministic procedurally generated worlds. The world, neural activations, weights, policy probabilities, recurrent state, value estimate, reward statistics, and historical checkpoints are exposed for inspection.
+MicroMind is a browser-based miniature reinforcement-learning laboratory. A small recurrent actor-critic learns to forage, conserve energy, and avoid hazards in deterministic procedurally generated worlds. The world, neural activations, learned weights, policy probabilities, recurrent state, value estimate, rewards, validation history, and historical brains are exposed for inspection.
+
+v0.1.0.1 is a stabilization update built directly from v0.1.0. It does not add curiosity or a world model. It protects good policies from being lost silently during later PPO training and makes the controls easier to understand on mobile.
 
 ## Run
 
@@ -18,20 +20,49 @@ Open `http://localhost:8080`. `dist/` is also a static GitHub-Pages-ready build.
 
 ## Modes
 
-- **LEARN** — trains PPO using multiple headless environments. Rendering is decoupled from training.
-- **OBSERVE** — watches the current stochastic policy in a separate procedural world.
-- **PROBE** — freezes movement and lets you reposition food, a hazard, or the agent. Policy outputs update from the real model without taking an action.
+- **LEARN** — trains the Latest brain with PPO using multiple headless environments. Rendering is decoupled from training.
+- **OBSERVE** — watches either **Latest** or the protected **Best** brain in a separate procedural world.
+- **PROBE** — freezes movement and lets you reposition food, a hazard, or the agent. Policy outputs update from the selected real model without taking an action.
+
+## Stability protection
+
+Automatic validation uses a deterministic seed domain named `validation:v1`, separate from both training and the manual held-out test domain. Validation runs at selected training milestones and on curriculum transitions.
+
+The best validation result for each curriculum protocol is preserved with:
+
+- model parameters
+- optimizer state
+- curriculum state
+- validation metrics
+- source training step
+
+A worse Latest policy never overwrites that protected brain. **Restore Best** is explicit and never automatic.
+
+Each automatic validation also writes an `autosave` checkpoint to IndexedDB. **Load** chooses the newest of the manual `latest` save and the validation autosave.
+
+## Curriculum stability
+
+Curriculum changes now use hysteresis:
+
+- sustained performance is required to promote
+- sustained collapse can demote the curriculum
+- a cooldown prevents immediate oscillation after a stage change
+- v0.1.0 saves receive a cooldown on migration before demotion is allowed
 
 ## Model
 
 `10 observations → 24 tanh recurrent units → 7-action policy + scalar value`
 
-The recurrent state is real and feeds the next timestep. v0.1.0 deliberately uses a compact stop-gradient recurrent PPO update rather than full BPTT; see `docs/ARCHITECTURE.md`.
+The recurrent state is real and feeds the next timestep. v0.1.0.1 deliberately preserves the compact stop-gradient recurrent PPO baseline rather than changing the learning algorithm at the same time as stabilization. See `docs/ARCHITECTURE.md`.
 
 ## Data integrity
 
-Training seeds and held-out evaluation seeds use different deterministic seed domains. `UNSEEN TEST` never trains the policy. Neural graphics are driven by live model values; there are no random decorative activity pulses.
+Training, validation, observation, and held-out evaluation use separate deterministic seed domains. `UNSEEN TEST` never trains the policy. Neural graphics are driven by live model values; there are no random decorative activity pulses.
 
 ## iPhone notes
 
-Canvas 2D is used instead of Three.js. Compute presets change training duty cycle. Start with **Balanced**; use **Eco** if Safari warms the phone during long runs.
+Canvas 2D is used instead of Three.js. Compute presets change training duty cycle. Start with **Balanced**; use **Eco** if Safari warms the phone during long runs. Automatic validation is intentionally infrequent and bounded.
+
+### Upgrading from v0.1.0
+
+Before replacing the old GitHub Pages build, press **Save** in the currently open v0.1.0 session if you want to preserve that in-memory run. v0.1.0.1 can load the existing schema-1 IndexedDB checkpoint and migrates it in memory without rewriting the old record until the next save/autosave.

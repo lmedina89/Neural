@@ -191,6 +191,8 @@ export class World {
   info() {
     return {
       seed: this.seed,
+      stageId: this.stage.id ?? 0,
+      stageName: this.stage.name ?? 'Unknown',
       steps: this.stepCount,
       food: this.foodCollected,
       hazardHits: this.hazardHits,
