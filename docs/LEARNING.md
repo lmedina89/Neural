@@ -1,30 +1,49 @@
-# What MicroMind Learns — v0.1.1
+# What MicroMind Learns — v0.1.1.1
 
-The environment defines physics, sensors, rewards and curriculum worlds. There is no hidden rule saying which direction to turn toward food or how to avoid an obstacle.
+The world defines physics, sensors, rewards and curriculum generation. There is still no hidden rule telling the agent to turn toward food, brake near a wall, or prefer one action in a particular state.
 
-The actor-critic learns its policy/value weights from on-policy experience. The recurrent state is computed from real observations and the previous hidden state.
+The actor-critic learns policy/value parameters from on-policy experience. The recurrent state comes from real observations and the prior hidden state.
 
-## What v0.1.1 adds to learning
+## Four different evidence streams
 
-The training objective is still PPO, but a candidate update is no longer accepted blindly. KL limits constrain destructive optimizer moves, while a fixed external validation protocol checks whether useful behavior survives across all learned task stages.
+v0.1.1.1 intentionally separates evidence by purpose:
 
-The system distinguishes:
+1. **Training performance** — recent active-curriculum episodes. Noisy and directly optimized.
+2. **Validation:v3** — fixed all-skills worlds used to protect/select archived policies.
+3. **heldout:compare:v2** — a comparison-only domain for historical checkpoints.
+4. **heldout:final:v2** — the final Unseen Test diagnostic.
 
-- **training performance** — recent episodes in the active curriculum;
-- **validation skill retention** — fixed `validation:v2` worlds never used for training;
-- **held-out testing** — a separate `heldout:v1` domain used only when the user runs Unseen Test / Compare Brains.
+The final holdout never changes the model-selection state. This matters because once a developer repeatedly chooses models from a holdout, it is no longer meaningfully unseen.
 
-This separation is critical: validation may select/protect a brain, but the final held-out worlds do not participate in that selection.
+## Why confidence ranges were added
 
-## Skill retention score
+A score such as `33%` from a small evaluation can move because of policy stochasticity and a small sample of worlds. v0.1.1.1 computes skill competence per episode and reports an uncertainty range rather than pretending the point estimate is exact.
 
-Each curriculum stage gets a bounded competence score composed primarily of food acquisition plus survival and remaining energy. It is diagnostic, not a claim of intelligence or consciousness.
+A large drop becomes a WATCH first. The same evidence must repeat before it becomes CONFIRMED.
 
-A catastrophic-forgetting alert requires both:
+## Specialization versus forgetting
 
-1. the skill previously achieved meaningful competence; and
-2. its current score falls by more than the configured tolerance.
+A policy can lose performance on one narrow skill while gaining useful competence elsewhere. v0.1.1.1 therefore separates:
+
+- healthy retention;
+- specialization watch;
+- skill-regression watch;
+- confirmed specialization;
+- confirmed skill regression;
+- confirmed aggregate regression.
+
+The labels are diagnostics, not claims about cognition.
+
+A single confirmed narrow skill loss can hold curriculum promotion, but does not automatically roll the entire trainable policy back unless aggregate evidence is also severe or multiple skills catastrophically fail.
+
+## Validation / holdout conflict
+
+Unseen Test re-measures the exact current Latest weights on validation:v3 without committing that measurement. It then evaluates Latest and Protected Balanced on `heldout:final:v2`.
+
+If validation prefers one brain and final holdout prefers the other by a material margin, MicroMind prints a **VALIDATION / HELD-OUT CONFLICT** and takes no automatic action.
+
+That conflict is valuable evidence that the selection metric may not predict broader behavior perfectly.
 
 ## Known limitation
 
-v0.1.1 improves policy preservation but does not solve continual learning in the research sense. Automatic recovery can return to a known good policy; it does not yet make the network internally consolidate old skills while learning new ones. Rehearsal, distillation, elastic-weight regularization, sequence training and learned world models remain future experiments.
+This release still protects policies externally. It does not yet solve continual learning inside the network itself. Rehearsal, teacher distillation, regularization, sequence/BPTT learning and world-model learning remain future research candidates.

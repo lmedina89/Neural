@@ -27,12 +27,18 @@ export class TrainingSession {
     this.bestBrain = null;
     this.bestArchive = {};
     this.validationHistory = [];
+    this.legacyValidationHistory = [];
     this.lastValidationStep = -1;
     this.nextValidationStep = nextValidationAfter(0);
     this.lastSkillValidation = null;
     this.skillBestScores = Array(CURRICULUM.length).fill(0);
-    this.retentionStatus = { forgetting: [], healthy: false };
+    this.skillBestRecords = emptySkillBestRecords();
+    this.skillRegressionStreaks = Array(CURRICULUM.length).fill(0);
+    this.balancedRegressionStreak = 0;
+    this.retentionStatus = defaultRetentionStatus();
     this.pendingLegacyBest = null;
+    this.pendingArchiveMigration = [];
+    this.archiveNeedsRebaseline = false;
     this.rollbackHistory = [];
     this.envs = [];
     this.obs = [];
@@ -142,8 +148,8 @@ export class TrainingSession {
     const required = v.stageResults.slice(0, this.curriculum.stage + 1);
     const weak = required.find(x => x.skillScore < CONFIG.curriculum.promotionSkillFloor);
     if (weak) return { allowed: false, reason: `${weak.name} retention ${(weak.skillScore * 100).toFixed(0)}% below ${(CONFIG.curriculum.promotionSkillFloor * 100).toFixed(0)}% floor` };
-    const forgotten = this.retentionStatus.forgetting.find(x => x.stage <= this.curriculum.stage);
-    if (forgotten) return { allowed: false, reason: `${forgotten.name} shows catastrophic forgetting` };
+    const alert = (this.retentionStatus.alerts || this.retentionStatus.forgetting || []).find(x => x.stage <= this.curriculum.stage);
+    if (alert) return { allowed: false, reason: `${alert.name} retention is under confirmation (${alert.severity || 'regression'}${alert.confirmed ? ', confirmed' : ''})` };
     return { allowed: true, reason: 'retained prior skills' };
   }
 
@@ -171,50 +177,102 @@ export class TrainingSession {
   }
 
   runValidation() {
-    const priorBalanced = this.getArchiveBrain('balanced');
-    const priorBalancedScore = priorBalanced?.validation?.categoryScores?.balanced ?? null;
     const validation = evaluateFullRetentionSuite(this.model, {
       episodesPerStage: CONFIG.validation.episodesPerStage,
       seedBase: CONFIG.validation.seedBase,
       deterministic: false,
     });
 
-    const forgetting = detectForgetting(validation.stageResults, this.skillBestScores);
-    const currentCandidate = this.makeCandidate(validation, 'latest');
-    const archiveUpdates = this.considerCandidate(currentCandidate);
-
-    // v0.1.0.1.x used a different validation protocol. On first v0.1.1 validation,
-    // re-evaluate that protected brain on the new fixed all-skills protocol instead
-    // of discarding it or comparing incompatible scores.
-    let migratedLegacy = null;
-    if (this.pendingLegacyBest?.model) {
-      const legacyModel = new RecurrentActorCritic(1);
-      legacyModel.restore(this.pendingLegacyBest.model);
-      const legacyValidation = evaluateFullRetentionSuite(legacyModel, {
-        episodesPerStage: CONFIG.validation.episodesPerStage,
-        seedBase: CONFIG.validation.seedBase,
-        deterministic: false,
-      });
-      migratedLegacy = this.makeCandidate(legacyValidation, 'migrated-v0.1.0.1-best', this.pendingLegacyBest);
-      this.considerCandidate(migratedLegacy);
-      updateSkillBests(this.skillBestScores, legacyValidation.stageResults);
+    // Validation protocol v3 changes both sampling density and skill-score statistics.
+    // Re-evaluate every unique protected legacy candidate before comparing scores so
+    // a v0.1.1/v2 number is never treated as compatible with a v0.1.1.1/v3 number.
+    let migratedArchive = [];
+    if (this.archiveNeedsRebaseline || this.pendingArchiveMigration.length || this.pendingLegacyBest?.model) {
+      const migrationSources = uniqueCandidates([
+        ...this.pendingArchiveMigration,
+        ...(this.pendingLegacyBest?.model ? [this.pendingLegacyBest] : []),
+      ]);
+      const reevaluated = [];
+      for (const base of migrationSources) {
+        if (!base?.model) continue;
+        const legacyModel = new RecurrentActorCritic(1);
+        legacyModel.restore(base.model);
+        const legacyValidation = evaluateFullRetentionSuite(legacyModel, {
+          episodesPerStage: CONFIG.validation.episodesPerStage,
+          seedBase: CONFIG.validation.seedBase,
+          deterministic: false,
+        });
+        reevaluated.push(this.makeCandidate(legacyValidation, 'recalibrated-v3-archive', base));
+      }
+      this.bestArchive = {};
+      this.bestBrain = null;
+      this.skillBestRecords = emptySkillBestRecords();
+      this.skillBestScores = Array(CURRICULUM.length).fill(0);
+      for (const candidate of reevaluated) {
+        this.considerCandidate(candidate);
+        updateSkillBestRecords(this.skillBestRecords, candidate.validation.stageResults, candidate.savedAtSteps);
+      }
+      syncSkillBestScores(this);
+      migratedArchive = reevaluated.map(x => ({ savedAtSteps: x.savedAtSteps, categoryScores: x.validation.categoryScores }));
+      this.pendingArchiveMigration = [];
       this.pendingLegacyBest = null;
+      this.archiveNeedsRebaseline = false;
     }
 
-    updateSkillBests(this.skillBestScores, validation.stageResults);
-    this.lastSkillValidation = validation;
-    this.retentionStatus = { forgetting, healthy: forgetting.length === 0, checkedAtSteps: this.totalSteps };
-    this.bestBrain = this.getArchiveBrain('balanced');
+    const priorBalanced = this.getArchiveBrain('balanced');
+    const priorBalancedScore = priorBalanced?.validation?.categoryScores?.balanced ?? null;
+    const skillAssessment = assessSkillRetention(
+      validation.stageResults,
+      this.skillBestRecords,
+      this.skillRegressionStreaks,
+    );
+    this.skillRegressionStreaks = skillAssessment.streaks;
 
     const currentBalanced = validation.categoryScores.balanced;
     const deltaFromBest = priorBalancedScore == null ? null : currentBalanced - priorBalancedScore;
+    const balancedEvidence = priorBalancedScore != null && balancedRegressionEvidence(validation, priorBalanced.validation);
+    this.balancedRegressionStreak = balancedEvidence ? this.balancedRegressionStreak + 1 : 0;
+    const balancedConfirmed = balancedEvidence && this.balancedRegressionStreak >= CONFIG.validation.balancedConfirmationCount;
+
+    const skillImprovements = detectSkillImprovements(validation.stageResults, this.skillBestRecords);
+    const confirmedCatastrophic = skillAssessment.alerts.filter(x => x.confirmed && x.severity === 'catastrophic');
+    const confirmedAlerts = skillAssessment.alerts.filter(x => x.confirmed);
+    let interpretation = 'healthy';
+    if (balancedConfirmed || confirmedCatastrophic.length >= 2) interpretation = 'confirmed-regression';
+    else if (confirmedAlerts.length && !balancedEvidence && skillImprovements.length) interpretation = 'confirmed-specialization';
+    else if (confirmedAlerts.length) interpretation = 'confirmed-skill-regression';
+    else if (skillAssessment.alerts.length && !balancedEvidence && skillImprovements.length) interpretation = 'specialization-watch';
+    else if (skillAssessment.alerts.length) interpretation = 'skill-regression-watch';
+    else if (balancedEvidence) interpretation = 'balanced-regression-watch';
+
+    const currentCandidate = this.makeCandidate(validation, 'latest');
+    const archiveUpdates = this.considerCandidate(currentCandidate);
+    updateSkillBestRecords(this.skillBestRecords, validation.stageResults, this.totalSteps);
+    syncSkillBestScores(this);
+    this.lastSkillValidation = validation;
+    this.bestBrain = this.getArchiveBrain('balanced');
+
     const improved = archiveUpdates.includes('balanced');
-    const regression = priorBalancedScore != null && deltaFromBest < -CONFIG.validation.regressionTolerance;
+    const regression = balancedEvidence;
+    const rollbackEligible = balancedConfirmed || confirmedCatastrophic.length >= 2;
     let autoRollback = null;
-    const catastrophicForgetting = forgetting.length > 0;
-    if ((regression || catastrophicForgetting) && CONFIG.validation.autoRollback && this.bestBrain?.model && this.bestBrain.savedAtSteps !== this.totalSteps) {
+    if (rollbackEligible && CONFIG.validation.autoRollback && this.bestBrain?.model && this.bestBrain.savedAtSteps !== this.totalSteps) {
       autoRollback = this.autoRecoverBalanced();
     }
+
+    this.retentionStatus = {
+      alerts: skillAssessment.alerts,
+      forgetting: skillAssessment.alerts,
+      healthy: skillAssessment.alerts.length === 0 && !balancedEvidence,
+      interpretation,
+      confirmed: balancedConfirmed || confirmedAlerts.length > 0,
+      balancedEvidence,
+      balancedConfirmed,
+      balancedRegressionStreak: this.balancedRegressionStreak,
+      skillImprovements,
+      checkedAtSteps: this.totalSteps,
+    };
+
     const record = {
       steps: this.totalSteps,
       episodes: this.totalEpisodes,
@@ -222,11 +280,16 @@ export class TrainingSession {
       validation,
       improved,
       regression,
+      balancedEvidence,
+      balancedConfirmed,
+      balancedRegressionStreak: this.balancedRegressionStreak,
       deltaFromBest,
-      forgetting,
+      forgetting: skillAssessment.alerts,
+      skillImprovements,
+      interpretation,
       archiveUpdates,
       autoRollback,
-      migratedLegacy: migratedLegacy ? { savedAtSteps: migratedLegacy.savedAtSteps, categoryScores: migratedLegacy.validation.categoryScores } : null,
+      migratedArchive,
       bestSteps: this.bestBrain?.savedAtSteps ?? null,
       bestScore: this.bestBrain?.validation?.categoryScores?.balanced ?? null,
     };
@@ -234,7 +297,8 @@ export class TrainingSession {
     if (this.validationHistory.length > 64) this.validationHistory.shift();
     this.lastValidationStep = this.totalSteps;
     const regularNextValidation = nextValidationAfter(this.totalSteps);
-    this.nextValidationStep = autoRollback
+    const needsConfirmation = Boolean(skillAssessment.alerts.length || balancedEvidence);
+    this.nextValidationStep = autoRollback || needsConfirmation
       ? Math.min(regularNextValidation, this.totalSteps + CONFIG.validation.recoveryValidationInterval)
       : regularNextValidation;
     return record;
@@ -312,7 +376,7 @@ export class TrainingSession {
 
   snapshot() {
     return {
-      schema: 3,
+      schema: 4,
       seed: this.seed,
       totalSteps: this.totalSteps,
       totalEpisodes: this.totalEpisodes,
@@ -326,18 +390,24 @@ export class TrainingSession {
       bestBrain: this.bestBrain,
       bestArchive: this.bestArchive,
       validationHistory: this.validationHistory,
+      legacyValidationHistory: this.legacyValidationHistory,
       lastValidationStep: this.lastValidationStep,
       nextValidationStep: this.nextValidationStep,
       lastSkillValidation: this.lastSkillValidation,
       skillBestScores: this.skillBestScores,
+      skillBestRecords: this.skillBestRecords,
+      skillRegressionStreaks: this.skillRegressionStreaks,
+      balancedRegressionStreak: this.balancedRegressionStreak,
       retentionStatus: this.retentionStatus,
       pendingLegacyBest: this.pendingLegacyBest,
+      pendingArchiveMigration: this.pendingArchiveMigration,
+      archiveNeedsRebaseline: this.archiveNeedsRebaseline,
       rollbackHistory: this.rollbackHistory,
     };
   }
 
   restore(data) {
-    if (!data || ![1, 2, 3].includes(data.schema)) throw new Error('Unsupported checkpoint schema');
+    if (!data || ![1, 2, 3, 4].includes(data.schema)) throw new Error('Unsupported checkpoint schema');
     this.seed = data.seed;
     this.actionRng = new PRNG(this.seed ^ 0xa5a5a5a5);
     this.totalSteps = data.totalSteps || 0;
@@ -354,56 +424,210 @@ export class TrainingSession {
       : nextHistoricalMilestoneAfter(this.totalSteps);
     if (data.schema === 1 && this.totalSteps > 0 && !this.milestones.has(this.totalSteps)) this.saveMilestone(this.totalSteps);
 
-    if (data.schema === 3) {
+    if (data.schema === 4) {
       this.bestArchive = data.bestArchive && typeof data.bestArchive === 'object' ? data.bestArchive : {};
       this.bestBrain = this.bestArchive.balanced || data.bestBrain || null;
       this.validationHistory = Array.isArray(data.validationHistory) ? data.validationHistory.slice(-64) : [];
+      this.legacyValidationHistory = Array.isArray(data.legacyValidationHistory) ? data.legacyValidationHistory.slice(-128) : [];
       this.lastValidationStep = Number(data.lastValidationStep ?? -1);
       this.nextValidationStep = Number.isFinite(data.nextValidationStep) ? data.nextValidationStep : nextValidationAfter(this.totalSteps);
       this.lastSkillValidation = data.lastSkillValidation || null;
-      this.skillBestScores = normalizeSkillBestScores(data.skillBestScores);
-      this.retentionStatus = data.retentionStatus || { forgetting: [], healthy: false };
+      this.skillBestRecords = normalizeSkillBestRecords(data.skillBestRecords, data.skillBestScores);
+      this.skillBestScores = this.skillBestRecords.map(x => x?.score || 0);
+      this.skillRegressionStreaks = normalizeStreaks(data.skillRegressionStreaks);
+      this.balancedRegressionStreak = Math.max(0, Number(data.balancedRegressionStreak) || 0);
+      this.retentionStatus = normalizeRetentionStatus(data.retentionStatus);
       this.pendingLegacyBest = data.pendingLegacyBest || null;
-    } else {
-      // Preserve the old protected-best brain. It will be re-evaluated against the
-      // new v2 all-skills protocol on the first validation after migration.
-      const legacyBest = data.bestBrain?.model ? data.bestBrain : strongestLegacyBest(data.bestBrains);
-      this.bestArchive = {};
-      this.bestBrain = legacyBest || null;
-      this.pendingLegacyBest = legacyBest || null;
+      this.pendingArchiveMigration = Array.isArray(data.pendingArchiveMigration) ? data.pendingArchiveMigration : [];
+      this.archiveNeedsRebaseline = Boolean(data.archiveNeedsRebaseline);
+    } else if (data.schema === 3) {
+      // v0.1.1 used validation:v2/retention-v2. Preserve every specialist model for
+      // inspection, but schedule an immediate v3 rebaseline before training advances.
+      this.bestArchive = data.bestArchive && typeof data.bestArchive === 'object' ? data.bestArchive : {};
+      this.bestBrain = this.bestArchive.balanced || data.bestBrain || null;
+      this.pendingArchiveMigration = uniqueCandidates([
+        ...Object.values(this.bestArchive || {}),
+        ...(data.bestBrain?.model ? [data.bestBrain] : []),
+        ...(data.pendingLegacyBest?.model ? [data.pendingLegacyBest] : []),
+      ]);
+      this.archiveNeedsRebaseline = true;
+      this.pendingLegacyBest = null;
+      this.legacyValidationHistory = Array.isArray(data.validationHistory) ? data.validationHistory.slice(-128) : [];
       this.validationHistory = [];
       this.lastValidationStep = -1;
       this.nextValidationStep = this.totalSteps;
       this.lastSkillValidation = null;
+      this.skillBestRecords = emptySkillBestRecords();
       this.skillBestScores = Array(CURRICULUM.length).fill(0);
-      this.retentionStatus = { forgetting: [], healthy: false };
+      this.skillRegressionStreaks = Array(CURRICULUM.length).fill(0);
+      this.balancedRegressionStreak = 0;
+      this.retentionStatus = defaultRetentionStatus();
+    } else {
+      // Schema 1/2 had at most one trustworthy protected Best. Keep it as a model
+      // candidate, but discard its incompatible numeric score until v3 recalibration.
+      const legacyBest = data.bestBrain?.model ? data.bestBrain : strongestLegacyBest(data.bestBrains);
+      this.bestArchive = {};
+      this.bestBrain = legacyBest || null;
+      this.pendingLegacyBest = legacyBest || null;
+      this.pendingArchiveMigration = legacyBest ? [legacyBest] : [];
+      this.archiveNeedsRebaseline = Boolean(legacyBest);
+      this.legacyValidationHistory = Array.isArray(data.validationHistory) ? data.validationHistory.slice(-128) : [];
+      this.validationHistory = [];
+      this.lastValidationStep = -1;
+      this.nextValidationStep = this.totalSteps;
+      this.lastSkillValidation = null;
+      this.skillBestRecords = emptySkillBestRecords();
+      this.skillBestScores = Array(CURRICULUM.length).fill(0);
+      this.skillRegressionStreaks = Array(CURRICULUM.length).fill(0);
+      this.balancedRegressionStreak = 0;
+      this.retentionStatus = defaultRetentionStatus();
     }
 
     this.rollbackHistory = Array.isArray(data.rollbackHistory) ? data.rollbackHistory.slice(-32) : [];
     for (let i = 0; i < this.envs.length; i++) this.resetEnv(i);
   }
+
 }
 
-function detectForgetting(stageResults, bestScores) {
+export function assessSkillRetention(stageResults, bestRecords, priorStreaks = []) {
+  const alerts = [];
+  const streaks = Array(CURRICULUM.length).fill(0);
+  for (const stage of stageResults) {
+    const best = bestRecords?.[stage.stage];
+    const prior = Number(best?.score) || 0;
+    const drop = prior - stage.skillScore;
+    const confidenceSeparated = Number.isFinite(best?.ciLow)
+      ? stage.skillCiHigh < best.ciLow
+      : drop >= CONFIG.validation.skillCatastrophicDrop;
+    const evidence = prior >= CONFIG.validation.forgettingFloor
+      && drop >= CONFIG.validation.skillWarningDrop
+      && (confidenceSeparated || drop >= CONFIG.validation.skillCatastrophicDrop);
+    streaks[stage.stage] = evidence ? (Math.max(0, Number(priorStreaks?.[stage.stage]) || 0) + 1) : 0;
+    if (!evidence) continue;
+    const severity = drop >= CONFIG.validation.skillCatastrophicDrop ? 'catastrophic' : 'warning';
+    alerts.push({
+      stage: stage.stage,
+      name: stage.name,
+      prior,
+      priorCiLow: Number(best?.ciLow) || prior,
+      priorCiHigh: Number(best?.ciHigh) || prior,
+      current: stage.skillScore,
+      currentCiLow: stage.skillCiLow,
+      currentCiHigh: stage.skillCiHigh,
+      drop,
+      severity,
+      streak: streaks[stage.stage],
+      confirmed: streaks[stage.stage] >= CONFIG.validation.confirmationCount,
+      confidenceSeparated,
+    });
+  }
+  return { alerts, streaks };
+}
+
+function balancedRegressionEvidence(current, prior) {
+  const priorScore = Number(prior?.categoryScores?.balanced);
+  if (!Number.isFinite(priorScore)) return false;
+  const drop = priorScore - current.balancedScore;
+  if (drop < CONFIG.validation.regressionTolerance) return false;
+  const priorLow = Number(prior?.balancedCiLow);
+  const currentHigh = Number(current?.balancedCiHigh);
+  return (Number.isFinite(priorLow) && Number.isFinite(currentHigh) && currentHigh < priorLow)
+    || drop >= CONFIG.validation.regressionTolerance * 1.5;
+}
+
+function detectSkillImprovements(stageResults, bestRecords) {
   const out = [];
   for (const stage of stageResults) {
-    const prior = Number(bestScores[stage.stage]) || 0;
-    const drop = prior - stage.skillScore;
-    if (prior >= CONFIG.validation.forgettingFloor && drop > CONFIG.validation.forgettingTolerance) {
-      out.push({ stage: stage.stage, name: stage.name, prior, current: stage.skillScore, drop });
+    const prior = Number(bestRecords?.[stage.stage]?.score) || 0;
+    if (stage.skillScore > prior + CONFIG.validation.improvementEpsilon) {
+      out.push({ stage: stage.stage, name: stage.name, prior, current: stage.skillScore, gain: stage.skillScore - prior });
     }
   }
   return out;
 }
 
-function updateSkillBests(bestScores, stageResults) {
-  for (const stage of stageResults) bestScores[stage.stage] = Math.max(Number(bestScores[stage.stage]) || 0, stage.skillScore);
+function updateSkillBestRecords(records, stageResults, atSteps) {
+  for (const stage of stageResults) {
+    const current = records[stage.stage];
+    if (!current || stage.skillScore > current.score + CONFIG.validation.improvementEpsilon) {
+      records[stage.stage] = {
+        stage: stage.stage,
+        name: stage.name,
+        score: stage.skillScore,
+        ciLow: stage.skillCiLow,
+        ciHigh: stage.skillCiHigh,
+        atSteps,
+      };
+    }
+  }
 }
 
-function normalizeSkillBestScores(values) {
-  const out = Array(CURRICULUM.length).fill(0);
-  if (Array.isArray(values)) for (let i = 0; i < out.length; i++) out[i] = Math.max(0, Number(values[i]) || 0);
+function emptySkillBestRecords() {
+  return Array(CURRICULUM.length).fill(null);
+}
+
+function normalizeSkillBestRecords(records, legacyScores) {
+  const out = emptySkillBestRecords();
+  if (Array.isArray(records)) {
+    for (let i = 0; i < out.length; i++) {
+      const x = records[i];
+      if (x && Number.isFinite(Number(x.score))) out[i] = { ...x, score: Math.max(0, Number(x.score)) };
+    }
+  } else if (Array.isArray(legacyScores)) {
+    for (let i = 0; i < out.length; i++) {
+      const score = Math.max(0, Number(legacyScores[i]) || 0);
+      if (score) out[i] = { stage: i, name: CURRICULUM[i].name, score, ciLow: score, ciHigh: score, atSteps: null };
+    }
+  }
   return out;
+}
+
+function syncSkillBestScores(session) {
+  session.skillBestScores = session.skillBestRecords.map(x => x?.score || 0);
+}
+
+function normalizeStreaks(values) {
+  const out = Array(CURRICULUM.length).fill(0);
+  if (Array.isArray(values)) for (let i = 0; i < out.length; i++) out[i] = Math.max(0, Math.floor(Number(values[i]) || 0));
+  return out;
+}
+
+function defaultRetentionStatus() {
+  return { alerts: [], forgetting: [], healthy: false, interpretation: 'unvalidated', confirmed: false };
+}
+
+function normalizeRetentionStatus(value) {
+  if (!value || typeof value !== 'object') return defaultRetentionStatus();
+  const alerts = Array.isArray(value.alerts) ? value.alerts : (Array.isArray(value.forgetting) ? value.forgetting : []);
+  return { ...defaultRetentionStatus(), ...value, alerts, forgetting: alerts };
+}
+
+function uniqueCandidates(values) {
+  const out = [];
+  const seen = new Set();
+  for (const candidate of values || []) {
+    if (!candidate?.model) continue;
+    const key = `${candidate.savedAtSteps ?? 'x'}:${modelFingerprint(candidate.model)}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    out.push(candidate);
+  }
+  return out;
+}
+
+function modelFingerprint(model) {
+  const keys = Object.keys(model?.params || {}).sort();
+  let h = 2166136261 >>> 0;
+  for (const key of keys) {
+    const arr = model.params[key];
+    if (!arr || typeof arr.length !== 'number') continue;
+    for (let i = 0; i < arr.length; i++) {
+      const q = Math.round((Number(arr[i]) || 0) * 1e6);
+      h ^= q & 0xffffffff;
+      h = Math.imul(h, 16777619) >>> 0;
+    }
+  }
+  return h.toString(16);
 }
 
 function strongestLegacyBest(bestBrains) {
@@ -424,6 +648,8 @@ function compactValidation(record) {
     bestScore: record.bestScore,
     bestSteps: record.bestSteps,
     forgetting: record.forgetting.map(x => x.stage),
+    interpretation: record.interpretation,
+    balancedConfirmed: record.balancedConfirmed,
     archiveUpdates: record.archiveUpdates,
     autoRollback: record.autoRollback,
   };

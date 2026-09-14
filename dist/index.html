@@ -14,7 +14,7 @@
         <div class="eyebrow">MICROMIND • LEARNING LABORATORY</div>
         <h1>Watch a tiny brain actually learn.</h1>
       </div>
-      <div class="build" id="buildTag">v0.1.1 • STABRET-011</div>
+      <div class="build" id="buildTag">v0.1.1.1 • VALCAL-0111</div>
     </header>
 
     <section class="controls" aria-label="Main controls">
@@ -43,8 +43,8 @@
       <button id="saveBtn" title="Save the current session to the protected Manual Save slot. A higher-step manual save will not be overwritten by a lower-step brain.">Save Manual</button>
       <button id="loadManualBtn" title="Load the Manual Save slot explicitly. Loading pauses training so you can verify the restored brain before resuming.">Load Manual</button>
       <button id="loadAutosaveBtn" title="Load the automatic validation autosave explicitly. Loading pauses training so you can verify it before resuming.">Load Autosave</button>
-      <button id="testBtn" title="Evaluate the current latest brain on held-out seeds that are never used for training.">Unseen Test</button>
-      <button id="compareBtn" title="Compare historical checkpoint brains on the same held-out seeds.">Compare Brains</button>
+      <button id="testBtn" title="Run the final held-out all-skills diagnostic. It never updates weights, archives, curriculum, or rollback state.">Unseen Test</button>
+      <button id="compareBtn" title="Compare historical brains on a separate held-out comparison domain, preserving the final Unseen Test domain.">Compare Brains</button>
       <button id="restoreBestBtn" title="Roll the trainable model and optimizer back to the best validated brain while keeping total experience steps monotonic." disabled>Restore Selected</button>
     </section>
     <section class="saveSlotsPanel" aria-label="Stored checkpoint slots">
@@ -63,14 +63,14 @@
         <div><b>View Brain</b><span>Latest is actively training. The protected archive separately preserves Balanced, Overall-return, Forager, Survivor, and Efficiency specialists.</span></div>
         <div><b>Save Manual</b><span>Saves the current run to the manual slot. Recovery protection refuses to overwrite a manual brain with a lower-step brain.</span></div>
         <div><b>Load Manual / Autosave</b><span>Each stored slot is shown separately with its step count and timestamp. Loading pauses training for verification.</span></div>
-        <div><b>Unseen Test</b><span>Manual generalization test on a separate held-out seed domain.</span></div>
-        <div><b>Compare Brains</b><span>Replays historical milestone brains against identical held-out worlds.</span></div>
+        <div><b>Unseen Test</b><span>Final all-skills holdout. Diagnostic only: it never selects archives or triggers rollback. Use sparingly so human decisions do not overfit it.</span></div>
+        <div><b>Compare Brains</b><span>Replays historical brains on a separate comparison-only holdout, not the final Unseen Test domain.</span></div>
         <div><b>Restore Selected</b><span>Explicitly restore the selected protected archive brain + optimizer. Experience steps remain monotonic; this never happens automatically.</span></div>
         <div><b>Return</b><span>Recent average total reward. Higher is better, but reinforcement learning is noisy.</span></div>
         <div><b>Food</b><span>Recent average resources collected per episode.</span></div>
         <div><b>Entropy</b><span>Policy uncertainty/exploration. High means action probabilities are more spread out.</span></div>
         <div><b>Value</b><span>The critic's estimate of expected future return from the current state.</span></div>
-        <div><b>Validation</b><span>A fixed all-skills suite checks every curriculum stage, detects forgetting, updates specialist archives, and creates a local autosave.</span></div>
+        <div><b>Validation</b><span>12 fixed seeds per skill plus confidence ranges. One bad result creates a watch; destructive rollback requires repeated evidence.</span></div>
       </div>
     </details>
 
@@ -138,16 +138,16 @@
 
 
     <section class="panel skillPanel">
-      <div class="panelHead"><strong>SKILL RETENTION</strong><span>fixed validation suite • higher is better</span></div>
-      <div id="skillRetention" class="skillRetention">Waiting for v0.1.1 validation…</div>
+      <div class="panelHead"><strong>SKILL RETENTION</strong><span>validation:v3 • 95% ranges • repeat-confirmed</span></div>
+      <div id="skillRetention" class="skillRetention">Waiting for v0.1.1.1 validation calibration…</div>
     </section>
 
     <section class="panel resultsPanel">
-      <div class="panelHead"><strong>EVALUATION / CHECKPOINTS</strong><span>validation + held-out seeds never train the agent</span></div>
+      <div class="panelHead"><strong>EVALUATION / CHECKPOINTS</strong><span>validation selects • final holdout only diagnoses</span></div>
       <div id="resultsText" class="resultsText">No evaluation run yet.</div>
     </section>
 
-    <footer>MicroMind v0.1.1 uses a real recurrent actor-critic and guarded PPO updates. Skill retention and neural glow are measured instrumentation, not simulated “thought.”</footer>
+    <footer>MicroMind v0.1.1.1 uses a real recurrent actor-critic and guarded PPO. Validation and final holdout are separated; neural glow is measured instrumentation, not simulated “thought.”</footer>
   </main>
   <script type="module" src="./src/app/main.js"></script>
 </body>

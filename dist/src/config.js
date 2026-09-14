@@ -1,5 +1,5 @@
-export const VERSION = '0.1.1';
-export const BUILD_MARKER = 'STABRET-011';
+export const VERSION = '0.1.1.1';
+export const BUILD_MARKER = 'VALCAL-0111';
 
 export const CONFIG = Object.freeze({
   world: {
@@ -80,17 +80,28 @@ export const CONFIG = Object.freeze({
     promotionSkillFloor: 0.42,
   },
   validation: {
-    seedBase: 'validation:v2',
-    episodesPerStage: 8,
+    seedBase: 'validation:v3',
+    episodesPerStage: 12,
+    confidenceZ: 1.96,
     regressionTolerance: 0.12,
     improvementEpsilon: 0.004,
-    forgettingTolerance: 0.18,
+    skillWarningDrop: 0.15,
+    skillCatastrophicDrop: 0.28,
     forgettingFloor: 0.45,
+    confirmationCount: 2,
+    balancedConfirmationCount: 2,
     autoRollback: true,
     rollbackLearningRateFactor: 0.6,
     recoveryValidationInterval: 25_000,
     schedule: [10000, 50000, 100000, 250000, 500000, 750000, 1000000],
     intervalAfterSchedule: 250000,
+  },
+  generalization: {
+    seedBase: 'heldout:final:v2',
+    compareSeedBase: 'heldout:compare:v2',
+    episodesPerStage: 8,
+    compareEpisodesPerStage: 4,
+    conflictMargin: 0.04,
   },
   runtime: {
     rolloutSteps: 64,

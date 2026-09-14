@@ -1,85 +1,128 @@
-# MicroMind v0.1.1 — Learning Stability & Skill Retention
+# MicroMind v0.1.1.1 — Validation Calibration & Generalization Diagnostics
 
-**Build:** `STABRET-011`
+**Build:** `VALCAL-0111`
 
-MicroMind is a browser-based reinforcement-learning laboratory built around a deliberately tiny, inspectable recurrent actor-critic. v0.1.1 keeps the same 1,040-parameter brain and the same physical world from the accepted v0.1.0.1.2 baseline. The milestone targets a problem observed during real iPhone training: a useful policy could learn a strong foraging/survival strategy and then partially destroy it tens of thousands of PPO steps later.
+MicroMind is a browser-based reinforcement-learning laboratory built around a deliberately tiny, inspectable recurrent actor-critic. v0.1.1.1 is a calibration milestone built directly from v0.1.1 `STABRET-011` after physical iPhone testing revealed an important research problem: the fixed skill-retention validator could rank an older protected brain above a newer policy even when a separate unseen-world test showed the newer policy outperforming it on every major observed metric.
+
+This build does **not** make the brain larger and does **not** add curiosity, a world model, language, or planning. It makes the measurement system more trustworthy before more cognitive complexity is added.
 
 ## What changed
 
-### Fixed all-skills validation
-Automatic validation no longer changes its definition when the curriculum changes. Every validation evaluates the current policy on all four fixed curriculum stages:
+### Validation protocol v3
 
-- Motor Nursery
-- Foraging
-- Obstacle Avoidance
-- Scarcity
+Automatic validation still tests every curriculum stage, but now uses **12 fixed episodes per skill** instead of 8 and reports a 95%-style confidence range for each skill score and the balanced score.
 
-Each stage produces a bounded skill-retention score. This makes earlier competence measurable after the curriculum advances.
+The protocol seed domain is now:
 
-### Catastrophic-forgetting detection
-MicroMind tracks the strongest validated score previously seen for each skill. A sufficiently large drop from a previously competent skill is reported as catastrophic forgetting.
+`validation:v3`
 
-Curriculum promotion is gated: a learner cannot advance just because its current-stage episode score is high if earlier validated skills have collapsed.
+Each per-stage skill score is computed from per-episode competence samples, so uncertainty can be estimated rather than hidden behind one percentage.
 
-### Protected specialist archive
-Instead of one scalar Best brain, v0.1.1 maintains separate protected candidates for:
+### Repeat-confirmed forgetting
 
-- Best Balanced
-- Best Overall return
-- Best Forager
-- Best Survivor
-- Best Efficiency
+A single bad validation no longer causes an immediate automatic rollback.
 
-Observe and Probe can inspect any available protected specialist. Manual restoration is still available.
+Per-skill behavior now progresses through:
 
-### Guarded PPO
-The PPO update path now includes:
+- no alert;
+- **WATCH** after one statistically meaningful regression;
+- **CONFIRMED** after the regression repeats on the next scheduled check.
 
-- a smaller clipping range;
-- a lower conservative learning-rate range;
-- target-KL epoch early stopping;
-- hard-KL update rejection with exact parameter/optimizer rollback;
-- adaptive learning rate;
-- learning-rate recovery cooldown after a validation rollback;
-- training-step entropy schedule;
-- adaptive entropy rescue when the action policy becomes too concentrated.
+A severe single-skill regression can block curriculum promotion while it is being confirmed, but one narrow skill drop alone does not automatically destroy a newer policy by restoring an old brain.
 
-### Validation recovery guard
-If the fixed skill suite detects either a severe balanced-policy regression or catastrophic forgetting, the trainable model is automatically restored from Best Balanced. The experience counter is **not** rewound. The recovery event is recorded and the learning rate is reduced.
+Automatic Best-Balanced recovery now requires stronger evidence: a repeat-confirmed balanced regression or multiple confirmed catastrophic skill regressions.
 
-For the next recovery period, validation temporarily runs every 25,000 experience steps so another collapse is caught sooner.
+When a watch is active, the next validation is brought forward to the existing 25k-step recovery interval.
 
-This is intentionally different from the old `Restore Best` button: the automatic guard is a safety rail triggered only by the objective retention protocol. The manual restore button remains available for deliberate experimentation.
+### v0.1.1 migration ordering fix
 
-## Existing saves
+The first v0.1.1 physical migration exposed a subtle ordering problem: the old protected brain was re-evaluated after the first Latest forgetting decision, which could temporarily display `retention OK` even when the newly recalibrated historical skill best was much higher.
 
-v0.1.1 uses checkpoint schema 3 and accepts schema 1, 2, and 3.
+v0.1.1.1 recalibrates the preserved archive **before** assessing Latest against it.
 
-When loading a v0.1.0.1.x/schema-2 session:
+### Protected archive recalibration
 
-1. the current Latest model, total experience counter, optimizer, curriculum and milestone history are preserved;
-2. the old protected Best is preserved as a migration candidate;
-3. training pauses after explicit load, as before;
-4. the first v0.1.1 validation re-evaluates Latest and the legacy Best on the new fixed all-skills protocol;
-5. no old score is compared numerically against a new incompatible score;
-6. subsequent saves use schema 3.
+v0.1.1 used `validation:v2`. Those numeric scores are not compared directly with v0.1.1.1 `validation:v3` scores.
+
+When a schema-3 v0.1.1 save is loaded:
+
+1. Latest, total experience, optimizer, curriculum, milestones and all protected specialist models are preserved;
+2. the existing protected models remain inspectable while paused;
+3. restoring an old archive brain is disabled until recalibration completes;
+4. Resume/Learn triggers immediate v3 evaluation before training advances;
+5. every unique preserved specialist model is re-evaluated under validation:v3;
+6. the new archive is rebuilt only from compatible v3 measurements;
+7. the current Latest is then assessed against that recalibrated baseline.
+
+### Final holdout is now truly all-skills
+
+The **Unseen Test** no longer tests only the current curriculum stage.
+
+It now evaluates all four skills on a separate final domain:
+
+`heldout:final:v2`
+
+with 8 episodes per skill, for 32 total held-out episodes.
+
+It reports:
+
+- all-skills generalization score + range;
+- return;
+- food;
+- survival;
+- remaining energy;
+- episode length;
+- each individual held-out skill score + range.
+
+The same current Latest weights also receive a **read-only validation:v3 measurement** during Unseen Test so validation and final-holdout rankings are compared on the exact same current policy.
+
+Critically, Unseen Test is diagnostic only. It does **not**:
+
+- update model weights;
+- update optimizer state;
+- replace a protected archive brain;
+- update curriculum;
+- append validation history;
+- trigger automatic rollback.
+
+If validation and the final holdout rank Latest vs Protected Balanced differently, the UI reports a **VALIDATION / HELD-OUT CONFLICT** instead of automatically choosing one.
+
+Repeatedly consulting any final holdout can still bias human development decisions, so the UI explicitly recommends using it sparingly.
+
+### Comparison domain separated from final holdout
+
+**Compare Brains** now uses:
+
+`heldout:compare:v2`
+
+rather than consuming the final Unseen Test domain.
+
+Historical comparisons are also all-skills, with a lighter 4 episodes per skill to keep the mobile comparison cost bounded.
+
+### Save schema 4
+
+v0.1.1.1 writes checkpoint schema 4 and reads schemas 1–4.
+
+Schema 4 adds calibrated skill-best records, confidence ranges, per-skill confirmation streaks, balanced-regression confirmation state, archive-recalibration state, and preserves incompatible older validation records separately as legacy history.
 
 The recovery-safe Manual Save / Validation Autosave split and lower-step overwrite guard remain intact.
 
-## Recommended upgrade from v0.1.0.1.2
+## Recommended upgrade from v0.1.1
 
-Before replacing the deployed files, press **Save Manual** in the currently running build.
+Before replacing the deployed files, press **Save Manual** in the currently running v0.1.1 page so the newest multi-million-step Latest and all protected specialists are preserved.
 
-After deploying v0.1.1:
+After deploying v0.1.1.1:
 
 1. refresh the page;
-2. verify the Manual Save step count;
+2. verify the Manual Save still shows the expected multi-million-step run;
 3. press **Load Manual**;
-4. confirm the expected total step count and that training is paused;
-5. press **Resume**;
-6. wait for the immediate migration/rebaseline validation;
-7. inspect the new Skill Retention panel and protected archive entries;
-8. press **Save Manual** after the v0.1.1 validation if you want a schema-3 manual checkpoint immediately.
+4. confirm training is paused and the experience counter is correct;
+5. do **not** press Restore Selected while calibration is pending;
+6. press **Resume**;
+7. wait for the one-time v3 archive recalibration to complete;
+8. inspect the Skill Retention ranges and WATCH/CONFIRMED labels;
+9. press **Save Manual** after calibration if you want an immediate schema-4 checkpoint;
+10. use Unseen Test sparingly as a final diagnostic.
 
 Do not clear Safari website data between versions; checkpoints live in IndexedDB.
 
@@ -100,8 +143,8 @@ npm run benchmark
 STEPS=150000 npm run benchmark
 ```
 
-The benchmark uses a fixed training seed and a separate held-out seed domain. See `docs/BENCHMARK.md` and `BUILD_REPORT.md` for the release run.
+The release benchmark uses a separate `benchmark:all-skills:v2` domain, not the final Unseen Test domain. See `docs/BENCHMARK.md` and `BUILD_REPORT.md`.
 
 ## Scope boundary
 
-v0.1.1 deliberately does **not** add a larger brain, world model, curiosity, imagined rollouts, language, or multi-agent behavior. The point of this milestone is to make the existing learner more trustworthy before adding cognitive complexity.
+v0.1.1.1 deliberately keeps the exact same **1,040-parameter** policy architecture and the same environment/reward mechanics as v0.1.1. The next cognitive milestone should not begin until this measurement system is physically accepted on iPhone.

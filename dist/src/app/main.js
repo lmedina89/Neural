@@ -1,7 +1,7 @@
 import { ACTIONS, BUILD_MARKER, CONFIG, VERSION } from '../config.js';
 import { TrainingSession } from '../ai/session.js';
 import { RecurrentActorCritic } from '../ai/model.js';
-import { evaluateModel } from '../evaluation/evaluator.js';
+import { evaluateFullRetentionSuite, evaluateHeldoutGeneralizationSuite, generalizationDiagnostic } from '../evaluation/evaluator.js';
 import { CURRICULUM } from '../sim/curriculum.js';
 import { World } from '../sim/world.js';
 import { domainSeed, PRNG } from '../utils/prng.js';
@@ -78,8 +78,8 @@ async function restoreCheckpointRecord(record, label) {
   resetViewState();
   updateUI();
   await refreshSaveSlots();
-  const migration = cp.schema < 3
-    ? ' Legacy checkpoint loaded safely. Its protected Best is preserved and will be re-evaluated on the new all-skills protocol before training advances.'
+  const migration = cp.schema < 4
+    ? ' Legacy checkpoint loaded safely. Protected brains remain inspectable and will be recalibrated on validation:v3 before training advances.'
     : '';
   setStatus(`${label} restored at ${session.totalSteps.toLocaleString()} steps. Training is PAUSED so you can verify it before pressing Resume/Learn.${migration}`);
   return true;
@@ -181,11 +181,12 @@ async function trainTick() {
       archiveModelCacheKey = null;
       syncArchiveControls();
       const v = result.validation;
-      const forgetting = v.forgetting?.length ? ` • forgetting: ${v.forgetting.map(x => x.name).join(', ')}` : '';
-      if (v.autoRollback) setStatus(`Skill-retention guard restored Best Balanced @ ${v.autoRollback.sourceSteps.toLocaleString()} and reduced LR after ${v.regression ? 'validation regression' : 'catastrophic forgetting'}.${forgetting}`);
-      else if (v.regression) setStatus(`Retention regression: latest balanced ${(v.validation.score * 100).toFixed(1)}% vs protected ${(v.bestScore * 100).toFixed(1)}%. Archive preserved.${forgetting}`);
-      else if (v.improved) setStatus(`New Best Balanced @ ${session.bestBrain.savedAtSteps.toLocaleString()} • ${(v.validation.score * 100).toFixed(1)}% skill balance.${forgetting}`);
-      else setStatus(`All-skills validation complete: balanced ${(v.validation.score * 100).toFixed(1)}% • protected ${(v.bestScore * 100).toFixed(1)}%.${forgetting}`);
+      const alerts = v.forgetting?.length ? ` • watch: ${v.forgetting.map(x => `${x.name}${x.confirmed ? ' confirmed' : ''}`).join(', ')}` : '';
+      const interp = String(v.interpretation || 'healthy').replaceAll('-', ' ');
+      if (v.autoRollback) setStatus(`Confirmed retention failure: restored Best Balanced @ ${v.autoRollback.sourceSteps.toLocaleString()} and reduced LR. ${interp}.${alerts}`);
+      else if (v.balancedEvidence || v.forgetting?.length) setStatus(`Validation ${interp}: balanced ${(v.validation.score * 100).toFixed(1)}% • protected ${(v.bestScore * 100).toFixed(1)}%. Re-check armed before any automatic rollback.${alerts}`);
+      else if (v.improved) setStatus(`New Best Balanced @ ${session.bestBrain.savedAtSteps.toLocaleString()} • ${(v.validation.score * 100).toFixed(1)}% skill balance.`);
+      else setStatus(`All-skills validation complete: balanced ${(v.validation.score * 100).toFixed(1)}% • protected ${(v.bestScore * 100).toFixed(1)}% • retention ${interp}.`);
       try {
         await saveCheckpoint(session.snapshot(), 'autosave');
         await refreshSaveSlots();
@@ -275,29 +276,42 @@ function updateUI() {
   el.paramCount.textContent = `${session.model.paramCount().toLocaleString()} params`;
   el.curriculum.textContent = session.curriculum.current().name;
   const lv = session.validationHistory.at(-1);
-  el.latestValidation.textContent = lv ? `${(lv.validation.score * 100).toFixed(1)}% @ ${lv.steps.toLocaleString()}${lv.regression ? ' REGRESSION' : ''}` : '—';
+  el.latestValidation.textContent = lv ? `${(lv.validation.score * 100).toFixed(1)}% @ ${lv.steps.toLocaleString()}${lv.balancedConfirmed ? ' CONFIRMED' : lv.balancedEvidence ? ' WATCH' : ''}` : '—';
   const balancedBrain = session.getArchiveBrain('balanced');
   if (balancedBrain?.validation?.categoryScores) el.bestValidation.textContent = `${(balancedBrain.validation.categoryScores.balanced * 100).toFixed(1)}% @ ${balancedBrain.savedAtSteps.toLocaleString()}`;
   else if (balancedBrain?.validation) el.bestValidation.textContent = `legacy ${Number(balancedBrain.validation.score ?? 0).toFixed(2)} @ ${balancedBrain.savedAtSteps.toLocaleString()}`;
   else el.bestValidation.textContent = '—';
-  el.retentionAlert.textContent = session.retentionStatus?.forgetting?.length ? `${session.retentionStatus.forgetting.length} FORGOTTEN` : (session.lastSkillValidation ? 'OK' : '—');
+  el.retentionAlert.textContent = session.lastSkillValidation ? retentionLabel(session.retentionStatus) : '—';
   renderSkillRetention();
   chartRenderer.draw(session.metrics);
   syncArchiveControls();
 }
 function renderSkillRetention() {
   const validation = session.lastSkillValidation;
-  if (!validation?.stageResults?.length) { el.skillRetention.textContent = 'Waiting for v0.1.1 validation…'; return; }
+  if (!validation?.stageResults?.length) { el.skillRetention.textContent = 'Waiting for v0.1.1.1 validation calibration…'; return; }
   el.skillRetention.innerHTML = '';
-  const forgetting = new Set((session.retentionStatus?.forgetting || []).map(x => x.stage));
+  const alerts = new Map((session.retentionStatus?.alerts || session.retentionStatus?.forgetting || []).map(x => [x.stage, x]));
   for (const stage of validation.stageResults) {
     const cell = document.createElement('div');
-    cell.className = `skillCell${forgetting.has(stage.stage) ? ' forgetting' : ''}`;
-    const best = session.skillBestScores[stage.stage] || stage.skillScore;
-    cell.innerHTML = `<b>${stage.name}</b><span>now ${(stage.skillScore * 100).toFixed(0)}% • best ${(best * 100).toFixed(0)}%</span>`;
+    const alert = alerts.get(stage.stage);
+    const best = session.skillBestRecords?.[stage.stage];
+    const cls = alert ? (alert.confirmed ? ' forgetting confirmed' : ' forgetting watch') : '';
+    cell.className = `skillCell${cls}`;
+    const nowRange = `${pct(stage.skillCiLow)}–${pct(stage.skillCiHigh)}`;
+    const bestScore = best?.score ?? stage.skillScore;
+    const bestRange = best ? `${pct(best.ciLow)}–${pct(best.ciHigh)}` : nowRange;
+    const tag = alert ? ` • ${alert.confirmed ? 'CONFIRMED' : 'WATCH'} ${alert.severity.toUpperCase()} x${alert.streak}` : '';
+    cell.innerHTML = `<b>${stage.name}</b><span>now ${pct(stage.skillScore)} [${nowRange}]</span><span>best ${pct(bestScore)} [${bestRange}]${tag}</span>`;
     el.skillRetention.append(cell);
   }
 }
+function pct(x) { return `${(Math.max(0, Math.min(1, Number(x) || 0)) * 100).toFixed(0)}%`; }
+function retentionLabel(status) {
+  const label = String(status?.interpretation || 'unvalidated').replaceAll('-', ' ').toUpperCase();
+  const alerts = status?.alerts?.length || status?.forgetting?.length || 0;
+  return alerts ? `${label} • ${alerts}` : label === 'HEALTHY' ? 'OK' : label;
+}
+
 function syncArchiveControls() {
   const map = {
     balanced: el.bestOption,
@@ -309,44 +323,74 @@ function syncArchiveControls() {
   for (const [category, option] of Object.entries(map)) {
     const brain = session.getArchiveBrain(category);
     option.disabled = !brain?.model;
+    const needsRebaseline = session.archiveNeedsRebaseline;
     const isLegacy = Boolean(brain?.model && !brain?.validation?.categoryScores);
     option.textContent = brain
-      ? isLegacy
-        ? `Legacy Best @ ${brain.savedAtSteps.toLocaleString()} (rebaseline pending)`
-        : `Best ${title(category)} @ ${brain.savedAtSteps.toLocaleString()}`
+      ? needsRebaseline
+        ? `Prior Best ${title(category)} @ ${brain.savedAtSteps.toLocaleString()} (calibration pending)`
+        : isLegacy
+          ? `Legacy Best @ ${brain.savedAtSteps.toLocaleString()} (calibration pending)`
+          : `Best ${title(category)} @ ${brain.savedAtSteps.toLocaleString()}`
       : `Best ${title(category)} (not validated)`;
   }
   const selected = selectedArchiveCategory();
   if (selected && !session.getArchiveBrain(selected)) el.brainSource.value = 'latest';
   const restoreTarget = selectedArchiveBrain() || session.getArchiveBrain('balanced');
-  el.restoreBest.disabled = !restoreTarget?.validation?.categoryScores;
+  el.restoreBest.disabled = session.archiveNeedsRebaseline || !restoreTarget?.validation?.categoryScores;
 }
 
-function evaluationText(name, r) {
-  return `${name}\nheld-out episodes: ${r.episodes}\nmean return: ${r.meanReturn.toFixed(3)}\nmean food: ${r.meanFood.toFixed(3)}\nsurvival: ${(r.survivalRate * 100).toFixed(1)}%\nmean energy: ${r.meanEnergy.toFixed(3)}\nmean steps: ${r.meanSteps.toFixed(1)}`;
+function suiteText(name, r) {
+  const skillLines = r.stageResults.map(x => `  ${x.name}: ${pct(x.skillScore)} [${pct(x.skillCiLow)}–${pct(x.skillCiHigh)}]`).join('\n');
+  return `${name}\nprotocol: ${r.protocol}\nepisodes: ${r.episodes} (${r.episodesPerStage}/skill)\ngeneralization score: ${pct(r.balancedScore)} [${pct(r.balancedCiLow)}–${pct(r.balancedCiHigh)}]\nmean return: ${r.meanReturn.toFixed(3)}\nmean food: ${r.meanFood.toFixed(3)}\nsurvival: ${(r.survivalRate * 100).toFixed(1)}%\nmean energy: ${r.meanEnergy.toFixed(3)}\nmean steps: ${r.meanSteps.toFixed(1)}\nskills:\n${skillLines}`;
 }
 async function runUnseen() {
   paused = true;
   el.pause.textContent = 'Resume';
-  setStatus('Running held-out evaluation…');
+  setStatus('Running FINAL held-out all-skills evaluation… This diagnostic never updates archives or rollback state.');
   await yieldUI();
-  const r = evaluateModel(session.model, session.curriculum.current(), { episodes: CONFIG.runtime.evalEpisodes, seedBase: 'heldout:v1', deterministic: false });
-  let text = evaluationText(`UNSEEN TEST • LATEST @ ${session.totalSteps.toLocaleString()} steps`, r);
+  const latestCalibration = evaluateFullRetentionSuite(session.model, {
+    episodesPerStage: CONFIG.validation.episodesPerStage,
+    seedBase: CONFIG.validation.seedBase,
+    deterministic: false,
+    protocolTag: 'retention-v3-ci-readonly',
+  });
+  await yieldUI();
+  const r = evaluateHeldoutGeneralizationSuite(session.model, {
+    episodesPerStage: CONFIG.generalization.episodesPerStage,
+    seedBase: CONFIG.generalization.seedBase,
+    deterministic: false,
+  });
+  let text = suiteText(`FINAL UNSEEN ALL-SKILLS • LATEST @ ${session.totalSteps.toLocaleString()} steps`, r);
+  text += `
+
+READ-ONLY VALIDATION CALIBRATION @ SAME LATEST WEIGHTS
+balanced: ${pct(latestCalibration.balancedScore)} [${pct(latestCalibration.balancedCiLow)}–${pct(latestCalibration.balancedCiHigh)}]
+This measurement is not committed to validation history or archives.`;
   const best = session.getArchiveBrain('balanced');
+  let br = null;
   if (best?.model) {
     await yieldUI();
     const model = new RecurrentActorCritic(1);
     model.restore(best.model);
-    const br = evaluateModel(model, session.curriculum.current(), { episodes: CONFIG.runtime.evalEpisodes, seedBase: 'heldout:v1', deterministic: false });
-    text += `\n\n${evaluationText(`PROTECTED BALANCED @ ${best.savedAtSteps.toLocaleString()} steps`, br)}`;
+    br = evaluateHeldoutGeneralizationSuite(model, {
+      episodesPerStage: CONFIG.generalization.episodesPerStage,
+      seedBase: CONFIG.generalization.seedBase,
+      deterministic: false,
+    });
+    text += `\n\n${suiteText(`PROTECTED BALANCED @ ${best.savedAtSteps.toLocaleString()} steps`, br)}`;
   }
+  const compatibleBestValidation = best?.validation?.protocol?.includes('retention-v3-ci') ? best.validation : null;
+  const diagnostic = generalizationDiagnostic(latestCalibration, compatibleBestValidation, r, br);
+  text += `\n\n${diagnostic.text}\nFINAL HOLDOUT IS DIAGNOSTIC ONLY — no weights, optimizer, archive, curriculum, validation history, or rollback state were changed. Repeatedly consulting this set can still bias human decisions, so use it sparingly.`;
   el.results.textContent = text;
-  setStatus('Held-out evaluation complete. Training and validation seed domains were not used.');
+  setStatus(diagnostic.conflict
+    ? 'Final holdout found a validation/generalization conflict. No automatic action taken.'
+    : 'Final held-out all-skills evaluation complete. No training-selection state changed.');
 }
 async function compareBrains() {
   paused = true;
   el.pause.textContent = 'Resume';
-  setStatus('Comparing historical brains on identical held-out seeds…');
+  setStatus('Comparing historical brains on the separate held-out comparison domain…');
   await yieldUI();
   const historical = [...session.milestones.values()].sort((a, b) => a.savedAtSteps - b.savedAtSteps);
   const selected = [], selectedSteps = new Set();
@@ -369,21 +413,27 @@ async function compareBrains() {
   for (const cp of entries) {
     const model = new RecurrentActorCritic(1);
     model.restore(cp.model);
-    const r = evaluateModel(model, CURRICULUM[Math.min(session.curriculum.stage, CURRICULUM.length - 1)], { episodes: CONFIG.runtime.compareEpisodes, seedBase: 'heldout:v1', deterministic: false });
+    const r = evaluateFullRetentionSuite(model, {
+      episodesPerStage: CONFIG.generalization.compareEpisodesPerStage,
+      seedBase: CONFIG.generalization.compareSeedBase,
+      deterministic: false,
+      protocolTag: 'heldout-comparison-v2',
+    });
     rows.push({ cp, r });
     await yieldUI();
   }
-  let html = '<table class="resultsTable"><thead><tr><th>brain</th><th>return</th><th>food</th><th>survival</th></tr></thead><tbody>';
+  let html = '<table class="resultsTable"><thead><tr><th>brain</th><th>gen</th><th>return</th><th>food</th><th>survival</th></tr></thead><tbody>';
   for (const { cp, r } of rows) {
     const isBest = cp.kind === 'balanced', isLatest = cp.kind === 'latest';
     const cls = isBest ? 'bestRow' : '';
     const label = `${cp.savedAtSteps.toLocaleString()}${isBest ? ' ★ BALANCED' : ''}${isLatest ? ' LATEST' : ''}`;
-    html += `<tr class="${cls}"><td>${label}</td><td>${r.meanReturn.toFixed(2)}</td><td>${r.meanFood.toFixed(2)}</td><td>${(r.survivalRate * 100).toFixed(0)}%</td></tr>`;
+    html += `<tr class="${cls}"><td>${label}</td><td>${pct(r.balancedScore)}</td><td>${r.meanReturn.toFixed(2)}</td><td>${r.meanFood.toFixed(2)}</td><td>${(r.survivalRate * 100).toFixed(0)}%</td></tr>`;
   }
-  html += '</tbody></table>';
+  html += '</tbody></table><div class="comparisonNote">Comparison uses heldout:compare:v2, not the final Unseen Test domain.</div>';
   el.results.innerHTML = html;
-  setStatus(`Checkpoint comparison complete using ${CONFIG.runtime.compareEpisodes} identical held-out episodes per brain.`);
+  setStatus(`Checkpoint comparison complete using ${CONFIG.generalization.compareEpisodesPerStage} episodes per skill on a non-final comparison domain.`);
 }
+
 function yieldUI() { return new Promise(resolve => setTimeout(resolve, 20)); }
 function title(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
