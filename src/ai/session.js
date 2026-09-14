@@ -39,6 +39,12 @@ export class TrainingSession {
     this.pendingLegacyBest = null;
     this.pendingArchiveMigration = [];
     this.archiveNeedsRebaseline = false;
+    this.promotionStreaks = Object.fromEntries(ARCHIVE_CATEGORIES.map(x => [x, 0]));
+    this.promotionCandidates = {};
+    this.lineageCounter = 0;
+    this.learnerLineage = makeRootLineage(seed, 0);
+    this.lineageHistory = [this.learnerLineage];
+    this.rehearsalEpisodeHistory = [];
     this.rollbackHistory = [];
     this.envs = [];
     this.obs = [];
@@ -47,20 +53,50 @@ export class TrainingSession {
     this.saveMilestone(0);
   }
 
+  trainingMix(stage = this.curriculum.stage) {
+    const row = CONFIG.continual.rehearsalMix[Math.max(0, Math.min(CURRICULUM.length - 1, stage))] || [];
+    const values = CURRICULUM.map((_, i) => Math.max(0, Number(row[i]) || 0));
+    const sum = values.reduce((a, b) => a + b, 0);
+    if (!(sum > 0)) return CURRICULUM.map((_, i) => i === stage ? 1 : 0);
+    return values.map(x => x / sum);
+  }
+
+  chooseTrainingStage(cursor = this.envSeedCursor) {
+    const mix = this.trainingMix();
+    const rng = new PRNG(domainSeed(`rehearsal:${this.seed}:curriculum:${this.curriculum.stage}`, cursor));
+    let r = rng.next();
+    for (let i = 0; i < mix.length; i++) {
+      r -= mix[i];
+      if (r <= 0) return i;
+    }
+    return this.curriculum.stage;
+  }
+
   addEnv(id) {
-    const seed = domainSeed(`train:${this.seed}`, this.envSeedCursor++);
-    const env = new World(seed, this.curriculum.current());
+    const cursor = this.envSeedCursor++;
+    const stageIndex = this.chooseTrainingStage(cursor);
+    const seed = domainSeed(`train:${this.seed}:stage:${stageIndex}`, cursor);
+    const env = new World(seed, CURRICULUM[stageIndex]);
     this.envs[id] = env;
     this.obs[id] = env.observe();
     this.hidden[id] = this.model.zeroHidden();
   }
 
   resetEnv(id) {
-    const seed = domainSeed(`train:${this.seed}`, this.envSeedCursor++);
-    const env = new World(seed, this.curriculum.current());
+    const cursor = this.envSeedCursor++;
+    const stageIndex = this.chooseTrainingStage(cursor);
+    const seed = domainSeed(`train:${this.seed}:stage:${stageIndex}`, cursor);
+    const env = new World(seed, CURRICULUM[stageIndex]);
     this.envs[id] = env;
     this.obs[id] = env.observe();
     this.hidden[id] = this.model.zeroHidden();
+  }
+
+  recentRehearsalMix() {
+    const counts = Array(CURRICULUM.length).fill(0);
+    for (const stage of this.rehearsalEpisodeHistory) if (Number.isInteger(stage) && counts[stage] != null) counts[stage]++;
+    const total = counts.reduce((a, b) => a + b, 0);
+    return { counts, fractions: counts.map(x => total ? x / total : 0), total, target: this.trainingMix() };
   }
 
   trainRollout(steps = CONFIG.runtime.rolloutSteps) {
@@ -95,11 +131,12 @@ export class TrainingSession {
           this.totalEpisodes++;
           this.episodeHistory.push(info);
           if (this.episodeHistory.length > 200) this.episodeHistory.shift();
+          this.rehearsalEpisodeHistory.push(info.stageId);
+          if (this.rehearsalEpisodeHistory.length > CONFIG.continual.recentMixWindow) this.rehearsalEpisodeHistory.shift();
           if (this.autoCurriculum && info.stageId === this.curriculum.stage) {
-            const gate = this.promotionGate();
             const event = this.curriculum.noteEpisode(info, this.totalEpisodes, {
-              promotionAllowed: gate.allowed,
-              gateReason: gate.reason,
+              promotionAllowed: true,
+              gateReason: 'autonomous current-stage performance',
             });
             if (event) curriculumEvent = event;
           }
@@ -135,6 +172,8 @@ export class TrainingSession {
       validation: validation ? compactValidation(validation) : null,
       retentionAlertCount: this.retentionStatus.forgetting.length,
       skillScores: this.lastSkillValidation?.stageResults?.map(x => x.skillScore) || [],
+      rehearsalMix: this.recentRehearsalMix(),
+      learnerLineage: { ...this.learnerLineage },
       ...ppo,
     };
     this.metrics.push(metric);
@@ -143,14 +182,7 @@ export class TrainingSession {
   }
 
   promotionGate() {
-    const v = this.lastSkillValidation;
-    if (!v) return { allowed: false, reason: 'waiting for skill-retention validation' };
-    const required = v.stageResults.slice(0, this.curriculum.stage + 1);
-    const weak = required.find(x => x.skillScore < CONFIG.curriculum.promotionSkillFloor);
-    if (weak) return { allowed: false, reason: `${weak.name} retention ${(weak.skillScore * 100).toFixed(0)}% below ${(CONFIG.curriculum.promotionSkillFloor * 100).toFixed(0)}% floor` };
-    const alert = (this.retentionStatus.alerts || this.retentionStatus.forgetting || []).find(x => x.stage <= this.curriculum.stage);
-    if (alert) return { allowed: false, reason: `${alert.name} retention is under confirmation (${alert.severity || 'regression'}${alert.confirmed ? ', confirmed' : ''})` };
-    return { allowed: true, reason: 'retained prior skills' };
+    return { allowed: true, reason: 'autonomous curriculum; retention metrics are observational' };
   }
 
   maybeSaveMilestones() {
@@ -166,6 +198,7 @@ export class TrainingSession {
       savedAtSteps: this.totalSteps,
       model: this.model.serialize(),
       curriculum: this.curriculum.serialize(),
+      lineage: structuredLineage(this.learnerLineage),
       metric: this.metrics.at(-1) || null,
     });
   }
@@ -183,9 +216,8 @@ export class TrainingSession {
       deterministic: false,
     });
 
-    // Validation protocol v3 changes both sampling density and skill-score statistics.
-    // Re-evaluate every unique protected legacy candidate before comparing scores so
-    // a v0.1.1/v2 number is never treated as compatible with a v0.1.1.1/v3 number.
+    // Re-evaluate legacy protected brains before comparing them with the learner.
+    // Migration is archive preservation, not a learner intervention.
     let migratedArchive = [];
     if (this.archiveNeedsRebaseline || this.pendingArchiveMigration.length || this.pendingLegacyBest?.model) {
       const migrationSources = uniqueCandidates([
@@ -202,14 +234,14 @@ export class TrainingSession {
           seedBase: CONFIG.validation.seedBase,
           deterministic: false,
         });
-        reevaluated.push(this.makeCandidate(legacyValidation, 'recalibrated-v3-archive', base));
+        reevaluated.push(this.makeCandidate(legacyValidation, 'recalibrated-legacy-champion', base));
       }
       this.bestArchive = {};
       this.bestBrain = null;
       this.skillBestRecords = emptySkillBestRecords();
       this.skillBestScores = Array(CURRICULUM.length).fill(0);
       for (const candidate of reevaluated) {
-        this.considerCandidate(candidate);
+        this.seedArchiveCandidate(candidate);
         updateSkillBestRecords(this.skillBestRecords, candidate.validation.stageResults, candidate.savedAtSteps);
       }
       syncSkillBestScores(this);
@@ -217,6 +249,8 @@ export class TrainingSession {
       this.pendingArchiveMigration = [];
       this.pendingLegacyBest = null;
       this.archiveNeedsRebaseline = false;
+      this.promotionStreaks = Object.fromEntries(ARCHIVE_CATEGORIES.map(x => [x, 0]));
+      this.promotionCandidates = {};
     }
 
     const priorBalanced = this.getArchiveBrain('balanced');
@@ -238,15 +272,16 @@ export class TrainingSession {
     const confirmedCatastrophic = skillAssessment.alerts.filter(x => x.confirmed && x.severity === 'catastrophic');
     const confirmedAlerts = skillAssessment.alerts.filter(x => x.confirmed);
     let interpretation = 'healthy';
-    if (balancedConfirmed || confirmedCatastrophic.length >= 2) interpretation = 'confirmed-regression';
+    if (balancedConfirmed || confirmedCatastrophic.length >= 2) interpretation = 'confirmed-regression-observed';
     else if (confirmedAlerts.length && !balancedEvidence && skillImprovements.length) interpretation = 'confirmed-specialization';
-    else if (confirmedAlerts.length) interpretation = 'confirmed-skill-regression';
+    else if (confirmedAlerts.length) interpretation = 'confirmed-skill-regression-observed';
     else if (skillAssessment.alerts.length && !balancedEvidence && skillImprovements.length) interpretation = 'specialization-watch';
     else if (skillAssessment.alerts.length) interpretation = 'skill-regression-watch';
     else if (balancedEvidence) interpretation = 'balanced-regression-watch';
 
-    const currentCandidate = this.makeCandidate(validation, 'latest');
-    const archiveUpdates = this.considerCandidate(currentCandidate);
+    const currentCandidate = this.makeCandidate(validation, 'learner');
+    const promotion = this.considerCandidate(currentCandidate);
+    const archiveUpdates = promotion.updates;
     updateSkillBestRecords(this.skillBestRecords, validation.stageResults, this.totalSteps);
     syncSkillBestScores(this);
     this.lastSkillValidation = validation;
@@ -254,11 +289,7 @@ export class TrainingSession {
 
     const improved = archiveUpdates.includes('balanced');
     const regression = balancedEvidence;
-    const rollbackEligible = balancedConfirmed || confirmedCatastrophic.length >= 2;
-    let autoRollback = null;
-    if (rollbackEligible && CONFIG.validation.autoRollback && this.bestBrain?.model && this.bestBrain.savedAtSteps !== this.totalSteps) {
-      autoRollback = this.autoRecoverBalanced();
-    }
+    const autoRollback = null; // v0.1.2: behavioral regression is observed, never auto-restored.
 
     this.retentionStatus = {
       alerts: skillAssessment.alerts,
@@ -271,6 +302,7 @@ export class TrainingSession {
       balancedRegressionStreak: this.balancedRegressionStreak,
       skillImprovements,
       checkedAtSteps: this.totalSteps,
+      intervention: 'observe-only',
     };
 
     const record = {
@@ -288,8 +320,10 @@ export class TrainingSession {
       skillImprovements,
       interpretation,
       archiveUpdates,
+      promotionPending: promotion.pending,
       autoRollback,
       migratedArchive,
+      learnerLineage: { ...this.learnerLineage },
       bestSteps: this.bestBrain?.savedAtSteps ?? null,
       bestScore: this.bestBrain?.validation?.categoryScores?.balanced ?? null,
     };
@@ -297,14 +331,14 @@ export class TrainingSession {
     if (this.validationHistory.length > 64) this.validationHistory.shift();
     this.lastValidationStep = this.totalSteps;
     const regularNextValidation = nextValidationAfter(this.totalSteps);
-    const needsConfirmation = Boolean(skillAssessment.alerts.length || balancedEvidence);
-    this.nextValidationStep = autoRollback || needsConfirmation
-      ? Math.min(regularNextValidation, this.totalSteps + CONFIG.validation.recoveryValidationInterval)
+    const needsFollowup = Boolean(skillAssessment.alerts.length || balancedEvidence || promotion.pending.length);
+    this.nextValidationStep = needsFollowup
+      ? Math.min(regularNextValidation, this.totalSteps + CONFIG.validation.watchValidationInterval)
       : regularNextValidation;
     return record;
   }
 
-  makeCandidate(validation, source = 'latest', base = null) {
+  makeCandidate(validation, source = 'learner', base = null) {
     return {
       savedAtSteps: base?.savedAtSteps ?? this.totalSteps,
       savedAtEpisodes: base?.savedAtEpisodes ?? this.totalEpisodes,
@@ -313,10 +347,12 @@ export class TrainingSession {
       curriculum: base?.curriculum ?? this.curriculum.serialize(),
       validation,
       source,
+      lineage: base?.lineage ? structuredLineage(base.lineage) : structuredLineage(this.learnerLineage),
+      observedAtSteps: this.totalSteps,
     };
   }
 
-  considerCandidate(candidate) {
+  seedArchiveCandidate(candidate) {
     const updates = [];
     for (const category of ARCHIVE_CATEGORIES) {
       const score = candidate.validation?.categoryScores?.[category];
@@ -324,12 +360,79 @@ export class TrainingSession {
       const prior = this.bestArchive[category];
       const priorScore = prior?.validation?.categoryScores?.[category];
       if (!Number.isFinite(priorScore) || score > priorScore + CONFIG.validation.improvementEpsilon) {
-        this.bestArchive[category] = { ...candidate, category, categoryScore: score };
+        this.bestArchive[category] = {
+          ...candidate,
+          category,
+          categoryScore: score,
+          promotedAtSteps: this.totalSteps,
+          promotionEvidence: { type: 'archive-rebaseline', confirmations: 0 },
+        };
         updates.push(category);
       }
     }
     this.bestBrain = this.getArchiveBrain('balanced');
     return updates;
+  }
+
+  considerCandidate(candidate) {
+    const updates = [];
+    const pending = [];
+    for (const category of ARCHIVE_CATEGORIES) {
+      const score = candidate.validation?.categoryScores?.[category];
+      if (!Number.isFinite(score)) continue;
+      const prior = this.bestArchive[category];
+      const priorScore = prior?.validation?.categoryScores?.[category];
+      if (!Number.isFinite(priorScore)) {
+        this.bestArchive[category] = {
+          ...candidate,
+          category,
+          categoryScore: score,
+          promotedAtSteps: this.totalSteps,
+          promotionEvidence: { type: 'first-champion', confirmations: 1 },
+        };
+        this.promotionStreaks[category] = 0;
+        delete this.promotionCandidates[category];
+        updates.push(category);
+        continue;
+      }
+
+      const margin = Math.max(CONFIG.validation.improvementEpsilon, CONFIG.validation.championPromotionMargin);
+      if (score > priorScore + margin) {
+        const streak = (Number(this.promotionStreaks[category]) || 0) + 1;
+        this.promotionStreaks[category] = streak;
+        this.promotionCandidates[category] = {
+          firstObservedAtSteps: this.promotionCandidates[category]?.firstObservedAtSteps ?? this.totalSteps,
+          latestObservedAtSteps: this.totalSteps,
+          streak,
+          score,
+          championScore: priorScore,
+        };
+        if (streak >= CONFIG.validation.championPromotionConfirmations) {
+          this.bestArchive[category] = {
+            ...candidate,
+            category,
+            categoryScore: score,
+            promotedAtSteps: this.totalSteps,
+            promotionEvidence: {
+              type: 'repeat-confirmed-challenger',
+              confirmations: streak,
+              priorChampionSteps: prior.savedAtSteps,
+              priorChampionScore: priorScore,
+            },
+          };
+          this.promotionStreaks[category] = 0;
+          delete this.promotionCandidates[category];
+          updates.push(category);
+        } else {
+          pending.push({ category, streak, required: CONFIG.validation.championPromotionConfirmations, score, championScore: priorScore });
+        }
+      } else {
+        this.promotionStreaks[category] = 0;
+        delete this.promotionCandidates[category];
+      }
+    }
+    this.bestBrain = this.getArchiveBrain('balanced');
+    return { updates, pending };
   }
 
   getArchiveBrain(category = 'balanced') {
@@ -339,44 +442,49 @@ export class TrainingSession {
   archiveSummary() {
     return Object.fromEntries(ARCHIVE_CATEGORIES.map(category => {
       const brain = this.getArchiveBrain(category);
-      return [category, brain ? { savedAtSteps: brain.savedAtSteps, score: brain.validation?.categoryScores?.[category] ?? null } : null];
+      return [category, brain ? {
+        savedAtSteps: brain.savedAtSteps,
+        score: brain.validation?.categoryScores?.[category] ?? null,
+        lineage: brain.lineage || null,
+        promotedAtSteps: brain.promotedAtSteps ?? brain.savedAtSteps,
+      } : null];
     }));
   }
 
-  autoRecoverBalanced() {
-    const brain = this.getArchiveBrain('balanced');
-    if (!brain?.model) return null;
+  forkFromChampion(category = 'balanced') {
+    const brain = this.getArchiveBrain(category);
+    if (!brain?.model) throw new Error(`No validated ${category} champion is available yet`);
     const sourceSteps = brain.savedAtSteps;
     this.model.restore(brain.model);
     if (brain.optimizer) this.trainer.restore(brain.optimizer);
-    this.trainer.learningRate = Math.max(CONFIG.ppo.minLearningRate, this.trainer.learningRate * CONFIG.validation.rollbackLearningRateFactor);
-    this.trainer.enterRecoveryCooldown(CONFIG.ppo.lrRecoveryCooldownUpdates);
-    // Keep the learner's current curriculum stage. The recovery target is policy stability,
-    // not pretending the experience/curriculum clock moved backward.
+    this.lineageCounter++;
+    const lineage = {
+      id: `L-${(this.seed >>> 0).toString(16)}-${this.lineageCounter}`,
+      startedAtSteps: this.totalSteps,
+      parent: {
+        category,
+        sourceSteps,
+        lineageId: brain.lineage?.id || null,
+      },
+      reason: 'manual-champion-fork',
+    };
+    this.learnerLineage = lineage;
+    this.lineageHistory.push(structuredLineage(lineage));
+    if (this.lineageHistory.length > 64) this.lineageHistory.shift();
     for (let i = 0; i < this.envs.length; i++) this.resetEnv(i);
-    const event = { atSteps: this.totalSteps, sourceSteps, category: 'balanced', automatic: true, learningRate: this.trainer.learningRate };
+    const event = { atSteps: this.totalSteps, sourceSteps, category, automatic: false, type: 'manual-champion-fork', lineageId: lineage.id };
     this.rollbackHistory.push(event);
     if (this.rollbackHistory.length > 32) this.rollbackHistory.shift();
     return event;
   }
 
   restoreBest(category = 'balanced') {
-    const brain = this.getArchiveBrain(category);
-    if (!brain?.model) throw new Error(`No validated ${category} brain is available yet`);
-    const sourceSteps = brain.savedAtSteps;
-    this.model.restore(brain.model);
-    if (brain.optimizer) this.trainer.restore(brain.optimizer);
-    if (brain.curriculum) this.curriculum.restore(brain.curriculum);
-    for (let i = 0; i < this.envs.length; i++) this.resetEnv(i);
-    const event = { atSteps: this.totalSteps, sourceSteps, category };
-    this.rollbackHistory.push(event);
-    if (this.rollbackHistory.length > 32) this.rollbackHistory.shift();
-    return event;
+    return this.forkFromChampion(category);
   }
 
   snapshot() {
     return {
-      schema: 4,
+      schema: 5,
       seed: this.seed,
       totalSteps: this.totalSteps,
       totalEpisodes: this.totalEpisodes,
@@ -402,12 +510,18 @@ export class TrainingSession {
       pendingLegacyBest: this.pendingLegacyBest,
       pendingArchiveMigration: this.pendingArchiveMigration,
       archiveNeedsRebaseline: this.archiveNeedsRebaseline,
+      promotionStreaks: this.promotionStreaks,
+      promotionCandidates: this.promotionCandidates,
+      learnerLineage: this.learnerLineage,
+      lineageCounter: this.lineageCounter,
+      lineageHistory: this.lineageHistory,
+      rehearsalEpisodeHistory: this.rehearsalEpisodeHistory,
       rollbackHistory: this.rollbackHistory,
     };
   }
 
   restore(data) {
-    if (!data || ![1, 2, 3, 4].includes(data.schema)) throw new Error('Unsupported checkpoint schema');
+    if (!data || ![1, 2, 3, 4, 5].includes(data.schema)) throw new Error('Unsupported checkpoint schema');
     this.seed = data.seed;
     this.actionRng = new PRNG(this.seed ^ 0xa5a5a5a5);
     this.totalSteps = data.totalSteps || 0;
@@ -424,7 +538,7 @@ export class TrainingSession {
       : nextHistoricalMilestoneAfter(this.totalSteps);
     if (data.schema === 1 && this.totalSteps > 0 && !this.milestones.has(this.totalSteps)) this.saveMilestone(this.totalSteps);
 
-    if (data.schema === 4) {
+    if (data.schema === 5) {
       this.bestArchive = data.bestArchive && typeof data.bestArchive === 'object' ? data.bestArchive : {};
       this.bestBrain = this.bestArchive.balanced || data.bestBrain || null;
       this.validationHistory = Array.isArray(data.validationHistory) ? data.validationHistory.slice(-64) : [];
@@ -440,9 +554,44 @@ export class TrainingSession {
       this.pendingLegacyBest = data.pendingLegacyBest || null;
       this.pendingArchiveMigration = Array.isArray(data.pendingArchiveMigration) ? data.pendingArchiveMigration : [];
       this.archiveNeedsRebaseline = Boolean(data.archiveNeedsRebaseline);
+      this.promotionStreaks = normalizePromotionStreaks(data.promotionStreaks);
+      this.promotionCandidates = data.promotionCandidates && typeof data.promotionCandidates === 'object' ? data.promotionCandidates : {};
+      this.lineageCounter = Math.max(0, Number(data.lineageCounter) || 0);
+      this.learnerLineage = data.learnerLineage ? structuredLineage(data.learnerLineage) : makeRootLineage(this.seed, this.totalSteps);
+      this.lineageHistory = Array.isArray(data.lineageHistory) && data.lineageHistory.length
+        ? data.lineageHistory.slice(-64).map(structuredLineage)
+        : [structuredLineage(this.learnerLineage)];
+      this.rehearsalEpisodeHistory = Array.isArray(data.rehearsalEpisodeHistory)
+        ? data.rehearsalEpisodeHistory.filter(x => Number.isInteger(x) && x >= 0 && x < CURRICULUM.length).slice(-CONFIG.continual.recentMixWindow)
+        : [];
+    } else if (data.schema === 4) {
+      // v0.1.1.1 already uses validation:v3. Preserve its champions exactly, but
+      // start the active learner as a new continual-learning lineage and validate
+      // immediately under the autonomous learner/champion protocol.
+      this.bestArchive = data.bestArchive && typeof data.bestArchive === 'object' ? data.bestArchive : {};
+      this.bestBrain = this.bestArchive.balanced || data.bestBrain || null;
+      this.validationHistory = Array.isArray(data.validationHistory) ? data.validationHistory.slice(-64) : [];
+      this.legacyValidationHistory = Array.isArray(data.legacyValidationHistory) ? data.legacyValidationHistory.slice(-128) : [];
+      this.lastValidationStep = Number(data.lastValidationStep ?? -1);
+      this.nextValidationStep = this.totalSteps;
+      this.lastSkillValidation = data.lastSkillValidation || null;
+      this.skillBestRecords = normalizeSkillBestRecords(data.skillBestRecords, data.skillBestScores);
+      this.skillBestScores = this.skillBestRecords.map(x => x?.score || 0);
+      this.skillRegressionStreaks = normalizeStreaks(data.skillRegressionStreaks);
+      this.balancedRegressionStreak = Math.max(0, Number(data.balancedRegressionStreak) || 0);
+      this.retentionStatus = normalizeRetentionStatus(data.retentionStatus);
+      this.pendingLegacyBest = data.pendingLegacyBest || null;
+      this.pendingArchiveMigration = Array.isArray(data.pendingArchiveMigration) ? data.pendingArchiveMigration : [];
+      this.archiveNeedsRebaseline = Boolean(data.archiveNeedsRebaseline);
+      this.promotionStreaks = Object.fromEntries(ARCHIVE_CATEGORIES.map(x => [x, 0]));
+      this.promotionCandidates = {};
+      this.lineageCounter = 0;
+      this.learnerLineage = makeMigratedLineage(this.seed, this.totalSteps, 4);
+      this.lineageHistory = [structuredLineage(this.learnerLineage)];
+      this.rehearsalEpisodeHistory = [];
     } else if (data.schema === 3) {
-      // v0.1.1 used validation:v2/retention-v2. Preserve every specialist model for
-      // inspection, but schedule an immediate v3 rebaseline before training advances.
+      // v0.1.1 used validation:v2. Preserve every specialist model for inspection,
+      // but schedule an immediate v3 rebaseline before autonomous training advances.
       this.bestArchive = data.bestArchive && typeof data.bestArchive === 'object' ? data.bestArchive : {};
       this.bestBrain = this.bestArchive.balanced || data.bestBrain || null;
       this.pendingArchiveMigration = uniqueCandidates([
@@ -462,6 +611,12 @@ export class TrainingSession {
       this.skillRegressionStreaks = Array(CURRICULUM.length).fill(0);
       this.balancedRegressionStreak = 0;
       this.retentionStatus = defaultRetentionStatus();
+      this.promotionStreaks = Object.fromEntries(ARCHIVE_CATEGORIES.map(x => [x, 0]));
+      this.promotionCandidates = {};
+      this.lineageCounter = 0;
+      this.learnerLineage = makeMigratedLineage(this.seed, this.totalSteps, 3);
+      this.lineageHistory = [structuredLineage(this.learnerLineage)];
+      this.rehearsalEpisodeHistory = [];
     } else {
       // Schema 1/2 had at most one trustworthy protected Best. Keep it as a model
       // candidate, but discard its incompatible numeric score until v3 recalibration.
@@ -481,6 +636,12 @@ export class TrainingSession {
       this.skillRegressionStreaks = Array(CURRICULUM.length).fill(0);
       this.balancedRegressionStreak = 0;
       this.retentionStatus = defaultRetentionStatus();
+      this.promotionStreaks = Object.fromEntries(ARCHIVE_CATEGORIES.map(x => [x, 0]));
+      this.promotionCandidates = {};
+      this.lineageCounter = 0;
+      this.learnerLineage = makeMigratedLineage(this.seed, this.totalSteps, data.schema);
+      this.lineageHistory = [structuredLineage(this.learnerLineage)];
+      this.rehearsalEpisodeHistory = [];
     }
 
     this.rollbackHistory = Array.isArray(data.rollbackHistory) ? data.rollbackHistory.slice(-32) : [];
@@ -592,6 +753,37 @@ function normalizeStreaks(values) {
   return out;
 }
 
+function normalizePromotionStreaks(values) {
+  const out = Object.fromEntries(ARCHIVE_CATEGORIES.map(x => [x, 0]));
+  if (values && typeof values === 'object') {
+    for (const category of ARCHIVE_CATEGORIES) out[category] = Math.max(0, Math.floor(Number(values[category]) || 0));
+  }
+  return out;
+}
+
+function makeRootLineage(seed, startedAtSteps = 0) {
+  return {
+    id: `L-${(seed >>> 0).toString(16)}-0`,
+    startedAtSteps: Math.max(0, Number(startedAtSteps) || 0),
+    parent: null,
+    reason: 'new-brain',
+  };
+}
+
+function makeMigratedLineage(seed, startedAtSteps, schema) {
+  return {
+    id: `L-${(seed >>> 0).toString(16)}-0`,
+    startedAtSteps: Math.max(0, Number(startedAtSteps) || 0),
+    parent: { legacySchema: schema },
+    reason: `migrated-schema-${schema}-learner`,
+  };
+}
+
+function structuredLineage(value) {
+  if (!value || typeof value !== 'object') return null;
+  return JSON.parse(JSON.stringify(value));
+}
+
 function defaultRetentionStatus() {
   return { alerts: [], forgetting: [], healthy: false, interpretation: 'unvalidated', confirmed: false };
 }
@@ -651,7 +843,8 @@ function compactValidation(record) {
     interpretation: record.interpretation,
     balancedConfirmed: record.balancedConfirmed,
     archiveUpdates: record.archiveUpdates,
-    autoRollback: record.autoRollback,
+    promotionPending: record.promotionPending || [],
+    autoRollback: null,
   };
 }
 

@@ -128,7 +128,7 @@ export function generalizationDiagnostic(latestValidation, protectedValidation, 
       champion,
       validationPref,
       heldoutPref,
-      text: `VALIDATION / HELD-OUT CONFLICT: validation prefers ${validationPref}, final holdout prefers ${heldoutPref}. Diagnostic only; no archive or rollback state changed.`,
+      text: `VALIDATION / HELD-OUT CONFLICT: validation prefers ${validationPref}, final holdout prefers ${heldoutPref}. Diagnostic only; no Champion archive, Learner weights, or promotion state changed.`,
     };
   }
   if (champion === 'latest') {
@@ -148,7 +148,7 @@ export function generalizationDiagnostic(latestValidation, protectedValidation, 
       champion,
       validationPref,
       heldoutPref,
-      text: 'HELD-OUT OBSERVATION: Protected Balanced is stronger on this final holdout. Diagnostic only; no training state changed.',
+      text: 'HELD-OUT OBSERVATION: Protected Balanced is stronger on this final holdout. Diagnostic only; no Learner or Champion state changed.',
     };
   }
   return {

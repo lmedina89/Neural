@@ -23,11 +23,12 @@ const el = {
   energyText: $('energyText'), curriculum: $('curriculumText'), rewardParts: $('rewardParts'), value: $('valueText'), results: $('resultsText'),
   latestValidation: $('latestValidation'), bestValidation: $('bestValidation'), retentionAlert: $('retentionAlert'), skillRetention: $('skillRetention'),
   manualSlot: $('manualSlotInfo'), autosaveSlot: $('autosaveSlotInfo'),
+  lineage: $('lineageVal'), rehearsal: $('rehearsalVal'), promotion: $('promotionVal'),
 };
 $('buildTag').textContent = `v${VERSION} • ${BUILD_MARKER}`;
 
 const budgets = { eco: { rollout: 8, delay: 30 }, balanced: { rollout: 18, delay: 10 }, max: { rollout: 36, delay: 0 } };
-const archiveLabels = { balanced: 'BALANCED', overall: 'OVERALL', forager: 'FORAGER', survivor: 'SURVIVOR', efficiency: 'EFFICIENCY' };
+const archiveLabels = { balanced: 'CHAMPION BALANCED', overall: 'CHAMPION OVERALL', forager: 'CHAMPION FORAGER', survivor: 'CHAMPION SURVIVOR', efficiency: 'CHAMPION EFFICIENCY' };
 let mode = 'LEARN', paused = false, trainBusy = false, observeAccum = 0, lastFrame = performance.now(), viewSeedIndex = 0;
 let session = new TrainingSession({ seed: 1337, envCount: CONFIG.runtime.trainEnvs });
 let archiveModelCache = null, archiveModelCacheKey = null;
@@ -78,8 +79,8 @@ async function restoreCheckpointRecord(record, label) {
   resetViewState();
   updateUI();
   await refreshSaveSlots();
-  const migration = cp.schema < 4
-    ? ' Legacy checkpoint loaded safely. Protected brains remain inspectable and will be recalibrated on validation:v3 before training advances.'
+  const migration = cp.schema < 5
+    ? ' Legacy checkpoint loaded safely. Champions remain frozen; the active policy becomes a new autonomous continual-learning lineage and is validated before normal training advances.'
     : '';
   setStatus(`${label} restored at ${session.totalSteps.toLocaleString()} steps. Training is PAUSED so you can verify it before pressing Resume/Learn.${migration}`);
   return true;
@@ -95,7 +96,7 @@ async function saveManualSafely() {
     }
     await saveCheckpoint(session.snapshot(), 'latest');
     await refreshSaveSlots();
-    setStatus(`Manual checkpoint saved at ${session.totalSteps.toLocaleString()} steps. Skill archive and protected specialists included.`);
+    setStatus(`Manual checkpoint saved at ${session.totalSteps.toLocaleString()} steps. Learner lineage, rehearsal state, and frozen Champion archive included.`);
   } catch (e) { setStatus(`Save failed: ${e.message}`); }
 }
 
@@ -122,7 +123,7 @@ function selectedViewModel() {
 function selectedSourceLabel() {
   const category = selectedArchiveCategory();
   if (mode !== 'LEARN' && category && selectedArchiveBrain()) return archiveLabels[category] || category.toUpperCase();
-  return 'LATEST';
+  return 'LEARNER';
 }
 function resetViewState() {
   const model = selectedViewModel();
@@ -145,7 +146,7 @@ function setMode(next) {
   if (next !== 'LEARN') resetViewState();
   el.viewBrainBadge.textContent = selectedSourceLabel();
   setStatus(next === 'LEARN'
-    ? 'Training active. Guarded PPO + all-skills validation protect learning and skill retention.'
+    ? 'Autonomous Learner active. PPO trains continuously across current challenges plus rehearsal of earlier skills; Champions are frozen observers.'
     : next === 'OBSERVE'
       ? `Watching the ${selectedSourceLabel().toLowerCase()} policy in a separate procedural world.`
       : 'World frozen. Tap to manipulate stimuli and inspect the selected policy response.');
@@ -181,12 +182,13 @@ async function trainTick() {
       archiveModelCacheKey = null;
       syncArchiveControls();
       const v = result.validation;
-      const alerts = v.forgetting?.length ? ` • watch: ${v.forgetting.map(x => `${x.name}${x.confirmed ? ' confirmed' : ''}`).join(', ')}` : '';
+      const alerts = v.forgetting?.length ? ` • observed: ${v.forgetting.map(x => `${x.name}${x.confirmed ? ' confirmed' : ''}`).join(', ')}` : '';
       const interp = String(v.interpretation || 'healthy').replaceAll('-', ' ');
-      if (v.autoRollback) setStatus(`Confirmed retention failure: restored Best Balanced @ ${v.autoRollback.sourceSteps.toLocaleString()} and reduced LR. ${interp}.${alerts}`);
-      else if (v.balancedEvidence || v.forgetting?.length) setStatus(`Validation ${interp}: balanced ${(v.validation.score * 100).toFixed(1)}% • protected ${(v.bestScore * 100).toFixed(1)}%. Re-check armed before any automatic rollback.${alerts}`);
-      else if (v.improved) setStatus(`New Best Balanced @ ${session.bestBrain.savedAtSteps.toLocaleString()} • ${(v.validation.score * 100).toFixed(1)}% skill balance.`);
-      else setStatus(`All-skills validation complete: balanced ${(v.validation.score * 100).toFixed(1)}% • protected ${(v.bestScore * 100).toFixed(1)}% • retention ${interp}.`);
+      const pendingBalanced = v.promotionPending?.find(x => x.category === 'balanced');
+      if (v.improved) setStatus(`New Champion Balanced promoted @ ${session.bestBrain.savedAtSteps.toLocaleString()} after repeat-confirmed validation. Learner continues independently.`);
+      else if (pendingBalanced) setStatus(`Learner is challenging Champion Balanced: confirmation ${pendingBalanced.streak}/${pendingBalanced.required}. No weights changed by validation.`);
+      else if (v.balancedEvidence || v.forgetting?.length) setStatus(`Validation observed ${interp}: learner ${(v.validation.score * 100).toFixed(1)}% • champion ${(v.bestScore * 100).toFixed(1)}%. Learner keeps learning; no behavioral rollback.${alerts}`);
+      else setStatus(`All-skills validation complete: learner ${(v.validation.score * 100).toFixed(1)}% • champion ${(v.bestScore * 100).toFixed(1)}% • retention ${interp}.`);
       try {
         await saveCheckpoint(session.snapshot(), 'autosave');
         await refreshSaveSlots();
@@ -196,8 +198,7 @@ async function trainTick() {
       }
     } else if (result.curriculumEvent) {
       const e = result.curriculumEvent;
-      if (e.reason === 'promotion-blocked') setStatus(`Curriculum promotion held at ${CURRICULUM[e.from].name}: ${e.gateReason || 'earlier skills need retention work'}.`);
-      else setStatus(`Curriculum ${e.reason}: ${CURRICULUM[e.from].name} → ${CURRICULUM[e.to].name}.`);
+      setStatus(`Autonomous curriculum ${e.reason}: ${CURRICULUM[e.from].name} → ${CURRICULUM[e.to].name}. Earlier skills remain in rehearsal.`);
     } else if (result.metric.earlyStopped && result.metric.maxEpochKL > CONFIG.ppo.targetKL) {
       setStatus(`PPO epoch stopped early at KL ${result.metric.maxEpochKL.toFixed(3)} to protect the current policy.`);
     }
@@ -282,13 +283,19 @@ function updateUI() {
   else if (balancedBrain?.validation) el.bestValidation.textContent = `legacy ${Number(balancedBrain.validation.score ?? 0).toFixed(2)} @ ${balancedBrain.savedAtSteps.toLocaleString()}`;
   else el.bestValidation.textContent = '—';
   el.retentionAlert.textContent = session.lastSkillValidation ? retentionLabel(session.retentionStatus) : '—';
+  el.lineage.textContent = `${session.learnerLineage?.id || '—'} @ ${(session.learnerLineage?.startedAtSteps ?? 0).toLocaleString()}`;
+  const mix = session.recentRehearsalMix();
+  const mixValues = mix.total ? mix.fractions : mix.target;
+  el.rehearsal.textContent = mixValues.map((x, i) => x >= 0.005 ? `${CURRICULUM[i].name.split(' ')[0]} ${Math.round(x * 100)}%` : null).filter(Boolean).join(' • ');
+  const pending = Object.entries(session.promotionCandidates || {}).map(([category, x]) => `${title(category)} ${x.streak}/${CONFIG.validation.championPromotionConfirmations}`);
+  el.promotion.textContent = pending.length ? pending.join(' • ') : 'none pending';
   renderSkillRetention();
   chartRenderer.draw(session.metrics);
   syncArchiveControls();
 }
 function renderSkillRetention() {
   const validation = session.lastSkillValidation;
-  if (!validation?.stageResults?.length) { el.skillRetention.textContent = 'Waiting for v0.1.1.1 validation calibration…'; return; }
+  if (!validation?.stageResults?.length) { el.skillRetention.textContent = 'Waiting for autonomous continual-learning validation…'; return; }
   el.skillRetention.innerHTML = '';
   const alerts = new Map((session.retentionStatus?.alerts || session.retentionStatus?.forgetting || []).map(x => [x.stage, x]));
   for (const stage of validation.stageResults) {
@@ -327,11 +334,11 @@ function syncArchiveControls() {
     const isLegacy = Boolean(brain?.model && !brain?.validation?.categoryScores);
     option.textContent = brain
       ? needsRebaseline
-        ? `Prior Best ${title(category)} @ ${brain.savedAtSteps.toLocaleString()} (calibration pending)`
+        ? `Prior Champion ${title(category)} @ ${brain.savedAtSteps.toLocaleString()} (calibration pending)`
         : isLegacy
-          ? `Legacy Best @ ${brain.savedAtSteps.toLocaleString()} (calibration pending)`
-          : `Best ${title(category)} @ ${brain.savedAtSteps.toLocaleString()}`
-      : `Best ${title(category)} (not validated)`;
+          ? `Legacy Champion @ ${brain.savedAtSteps.toLocaleString()} (calibration pending)`
+          : `Champion ${title(category)} @ ${brain.savedAtSteps.toLocaleString()}`
+      : `Champion ${title(category)} (not validated)`;
   }
   const selected = selectedArchiveCategory();
   if (selected && !session.getArchiveBrain(selected)) el.brainSource.value = 'latest';
@@ -346,7 +353,7 @@ function suiteText(name, r) {
 async function runUnseen() {
   paused = true;
   el.pause.textContent = 'Resume';
-  setStatus('Running FINAL held-out all-skills evaluation… This diagnostic never updates archives or rollback state.');
+  setStatus('Running FINAL held-out all-skills evaluation… This diagnostic never updates Champions or promotion state.');
   await yieldUI();
   const latestCalibration = evaluateFullRetentionSuite(session.model, {
     episodesPerStage: CONFIG.validation.episodesPerStage,
@@ -377,11 +384,11 @@ This measurement is not committed to validation history or archives.`;
       seedBase: CONFIG.generalization.seedBase,
       deterministic: false,
     });
-    text += `\n\n${suiteText(`PROTECTED BALANCED @ ${best.savedAtSteps.toLocaleString()} steps`, br)}`;
+    text += `\n\n${suiteText(`CHAMPION BALANCED @ ${best.savedAtSteps.toLocaleString()} steps`, br)}`;
   }
   const compatibleBestValidation = best?.validation?.protocol?.includes('retention-v3-ci') ? best.validation : null;
   const diagnostic = generalizationDiagnostic(latestCalibration, compatibleBestValidation, r, br);
-  text += `\n\n${diagnostic.text}\nFINAL HOLDOUT IS DIAGNOSTIC ONLY — no weights, optimizer, archive, curriculum, validation history, or rollback state were changed. Repeatedly consulting this set can still bias human decisions, so use it sparingly.`;
+  text += `\n\n${diagnostic.text}\nFINAL HOLDOUT IS DIAGNOSTIC ONLY — no weights, optimizer, Champion archive, curriculum, validation history, or promotion state were changed. Repeatedly consulting this set can still bias human decisions, so use it sparingly.`;
   el.results.textContent = text;
   setStatus(diagnostic.conflict
     ? 'Final holdout found a validation/generalization conflict. No automatic action taken.'
@@ -426,7 +433,7 @@ async function compareBrains() {
   for (const { cp, r } of rows) {
     const isBest = cp.kind === 'balanced', isLatest = cp.kind === 'latest';
     const cls = isBest ? 'bestRow' : '';
-    const label = `${cp.savedAtSteps.toLocaleString()}${isBest ? ' ★ BALANCED' : ''}${isLatest ? ' LATEST' : ''}`;
+    const label = `${cp.savedAtSteps.toLocaleString()}${isBest ? ' ★ CHAMPION' : ''}${isLatest ? ' LEARNER' : ''}`;
     html += `<tr class="${cls}"><td>${label}</td><td>${pct(r.balancedScore)}</td><td>${r.meanReturn.toFixed(2)}</td><td>${r.meanFood.toFixed(2)}</td><td>${(r.survivalRate * 100).toFixed(0)}%</td></tr>`;
   }
   html += '</tbody></table><div class="comparisonNote">Comparison uses heldout:compare:v2, not the final Unseen Test domain.</div>';
@@ -449,7 +456,7 @@ el.brainSource.addEventListener('change', () => {
   if (mode !== 'LEARN') resetViewState();
   el.viewBrainBadge.textContent = selectedSourceLabel();
   syncArchiveControls();
-  setStatus(mode === 'LEARN' ? 'View Brain selection applies in Observe/Probe; Learn always shows/trains Latest.' : `Now inspecting ${selectedSourceLabel().toLowerCase()} brain.`);
+  setStatus(mode === 'LEARN' ? 'View Brain selection applies in Observe/Probe; Learn always shows/trains the autonomous Learner.' : `Now inspecting ${selectedSourceLabel().toLowerCase()} brain.`);
 });
 el.save.addEventListener('click', saveManualSafely);
 el.loadManual.addEventListener('click', async () => { try { await restoreCheckpointRecord(await loadCheckpointRecord('latest'), 'Manual Save'); } catch (e) { setStatus(`Manual load failed: ${e.message}`); } });
@@ -459,14 +466,14 @@ el.restoreBest.addEventListener('click', () => {
   const brain = session.getArchiveBrain(category);
   if (!brain) return;
   const source = brain.savedAtSteps;
-  if (!confirm(`Restore the trainable policy + optimizer from Best ${title(category)} @ ${source.toLocaleString()} steps? Total experience steps will remain ${session.totalSteps.toLocaleString()} for an honest training history.`)) return;
-  session.restoreBest(category);
+  if (!confirm(`Fork a NEW Learner lineage from Champion ${title(category)} @ ${source.toLocaleString()} steps? This is a manual experiment only. Experience age stays ${session.totalSteps.toLocaleString()} and automatic validation never performs this action.`)) return;
+  const event = session.forkFromChampion(category);
   archiveModelCache = null;
   archiveModelCacheKey = null;
   el.brainSource.value = 'latest';
   resetViewState();
   updateUI();
-  setStatus(`Latest policy restored from Best ${title(category)} @ ${source.toLocaleString()} steps. Training can resume from that brain.`);
+  setStatus(`Learner forked manually from Champion ${title(category)} @ ${source.toLocaleString()} • lineage ${event.lineageId}.`);
 });
 el.test.addEventListener('click', runUnseen);
 el.compare.addEventListener('click', compareBrains);

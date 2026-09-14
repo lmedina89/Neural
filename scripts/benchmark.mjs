@@ -2,12 +2,18 @@ import { TrainingSession } from '../src/ai/session.js';
 import { RecurrentActorCritic } from '../src/ai/model.js';
 import { evaluateFullRetentionSuite } from '../src/evaluation/evaluator.js';
 
+// Release benchmark deliberately starts the Learner at the hardest curriculum stage
+// while continual rehearsal keeps all earlier skills in the experience stream.
 const session = new TrainingSession({ seed: 424242, envCount: 8, autoCurriculum: false });
-const evalOptions = { episodesPerStage: 8, seedBase: 'benchmark:all-skills:v2', deterministic: false, protocolTag: 'release-benchmark-v2' };
+session.curriculum.stage = 3;
+for (let i = 0; i < session.envs.length; i++) session.resetEnv(i);
+
+const evalOptions = { episodesPerStage: 8, seedBase: 'benchmark:all-skills:v3', deterministic: false, protocolTag: 'release-benchmark-v3' };
 const initial = evaluateFullRetentionSuite(session.model, evalOptions);
 console.log('initial', summary(initial));
+console.log('rehearsal target', session.trainingMix().map(x => Number(x.toFixed(3))));
 
-const target = Number(process.env.STEPS || 60000);
+const target = Number(process.env.STEPS || 80000);
 let nextPrint = 10000;
 while (session.totalSteps < target) {
   const { metric, validation } = session.trainRollout(32);
@@ -20,58 +26,61 @@ while (session.totalSteps < target) {
       kl: metric.maxEpochKL.toFixed(4),
       epochs: metric.epochsRun,
       rejected: metric.updateRejected,
+      rehearsal: metric.rehearsalMix.fractions.map(x => Number(x.toFixed(2))),
     });
     nextPrint += 10000;
   }
   if (validation) console.log('validation', {
     steps: validation.steps,
-    balanced: validation.validation.score.toFixed(3),
+    learner: validation.validation.score.toFixed(3),
     interpretation: validation.interpretation,
-    balancedEvidence: validation.balancedEvidence,
-    balancedConfirmed: validation.balancedConfirmed,
     alerts: validation.forgetting.map(x => `${x.name}:${x.severity}:x${x.streak}`),
-    autoRollback: validation.autoRollback?.sourceSteps ?? null,
-    best: Number(validation.bestScore ?? 0).toFixed(3),
+    promotions: validation.archiveUpdates,
+    pending: validation.promotionPending.map(x => `${x.category}:${x.streak}/${x.required}`),
+    champion: Number(validation.bestScore ?? 0).toFixed(3),
+    autoRollback: validation.autoRollback,
   });
 }
 
-const latest = evaluateFullRetentionSuite(session.model, evalOptions);
-let protectedBest = null;
+const learner = evaluateFullRetentionSuite(session.model, evalOptions);
+let champion = null;
 if (session.bestBrain?.model) {
   const model = new RecurrentActorCritic(1);
   model.restore(session.bestBrain.model);
-  protectedBest = evaluateFullRetentionSuite(model, evalOptions);
+  champion = evaluateFullRetentionSuite(model, evalOptions);
 }
 
-console.log('latest', summary(latest));
-console.log('protected balanced', { checkpointSteps: session.bestBrain?.savedAtSteps ?? null, ...summary(protectedBest) });
+console.log('learner', summary(learner));
+console.log('champion balanced', { checkpointSteps: session.bestBrain?.savedAtSteps ?? null, ...summary(champion) });
 
 const report = {
   trainingSteps: session.totalSteps,
   initial: summaryNumbers(initial),
-  latest: summaryNumbers(latest),
-  protectedBalanced: protectedBest ? { steps: session.bestBrain.savedAtSteps, ...summaryNumbers(protectedBest) } : null,
-  rollbacks: session.rollbackHistory,
+  learner: summaryNumbers(learner),
+  championBalanced: champion ? { steps: session.bestBrain.savedAtSteps, ...summaryNumbers(champion) } : null,
+  rehearsalTarget: session.trainingMix(),
+  rehearsalObserved: session.recentRehearsalMix(),
+  lineage: session.learnerLineage,
   archive: session.archiveSummary(),
   validations: session.validationHistory.map(v => ({
     steps: v.steps,
-    balanced: v.validation.score,
+    learner: v.validation.score,
     interpretation: v.interpretation,
-    balancedEvidence: v.balancedEvidence,
-    balancedConfirmed: v.balancedConfirmed,
     alerts: v.forgetting.map(x => ({ stage: x.stage, severity: x.severity, streak: x.streak, confirmed: x.confirmed })),
+    promotions: v.archiveUpdates,
+    pending: v.promotionPending,
     autoRollback: v.autoRollback,
-    bestScore: v.bestScore,
+    championScore: v.bestScore,
   })),
 };
 console.log('summary-json', JSON.stringify(report));
 
-if (!protectedBest || protectedBest.balancedScore <= initial.balancedScore) {
-  console.error('Benchmark failed: protected balanced brain did not improve all-skills benchmark score over the initial policy.');
+if (!champion || champion.balancedScore <= initial.balancedScore) {
+  console.error('Benchmark failed: repeat-confirmed Champion did not improve all-skills benchmark score over the initial policy.');
   process.exitCode = 1;
 }
-if (latest.balancedScore <= initial.balancedScore) {
-  console.error('Benchmark failed: latest policy did not improve all-skills benchmark score over the initial policy.');
+if (session.rollbackHistory.some(x => x?.automatic)) {
+  console.error('Benchmark failed: behavioral automatic rollback occurred in autonomous-learning mode.');
   process.exitCode = 1;
 }
 

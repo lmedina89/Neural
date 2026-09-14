@@ -1,104 +1,42 @@
-# MicroMind v0.1.1.1 — Validation Calibration & Generalization Diagnostics
+# MicroMind v0.1.2 — Build Report
 
-**Build marker:** `VALCAL-0111`
+**Build marker:** `AUTOCONT-012`  
+**Baseline:** exact v0.1.1.1 `VALCAL-0111` package  
+**Save schema:** 5 (loads schemas 1–5)
 
-## Exact baseline
+## Scope
+v0.1.2 changes the training philosophy from behavioral rollback to autonomous continual learning. The 1,040-parameter recurrent actor-critic is unchanged.
 
-Built directly from the packaged MicroMind v0.1.1 `STABRET-011` repository. The extracted v0.1.1 directory was byte-for-byte compared with the delivered v0.1.1 ZIP before modification.
+### Implemented
+- **Learner / Champion separation:** the active Learner is never automatically replaced for behavioral regression. Frozen Champions preserve repeatedly validated policies.
+- **Continual rehearsal:** training episodes are interleaved across previously learned skills. Target mixes by current curriculum stage are 100/0/0/0, 25/75/0/0, 15/20/65/0, and 10/15/20/55 percent for Motor/Foraging/Obstacle/Scarcity.
+- **Repeat-confirmed Champion promotion:** after an initial Champion exists, a challenger must beat it on two consecutive validation checks before promotion.
+- **Observational retention:** forgetting/regression remains visible and can schedule an earlier re-check, but does not restore weights or alter the Learner.
+- **Numerical safety retained:** PPO hard-KL rejection still restores a mathematically destructive update; this is optimizer safety, not behavioral selection.
+- **Lineage tracking:** Champion snapshots record Learner lineage. Manual `Fork From Champion` creates a new explicit lineage; it is never automatic.
+- **UI diagnostics:** Learner lineage, observed rehearsal mix and pending Champion challenges are visible.
+- Final holdout remains diagnostic-only and separate from training/validation.
 
-The following core systems were intentionally left unchanged:
+## Automated QA
+- `npm test`: **40/40 PASS**
+- JS/MJS syntax checks: PASS
+- Static production build: PASS
+- Clean-unzip test/build: PASS
+- Static HTTP resource smoke: PASS
+- ZIP integrity: PASS
 
-- 10→24 recurrent actor-critic architecture / 1,040 parameters;
-- PPO optimizer implementation and KL safety controller;
-- world physics;
-- reward decomposition;
-- sensor semantics;
-- curriculum world definitions;
-- neural/world renderers;
-- checkpoint IndexedDB storage implementation.
+## Controlled benchmark
+120,064 experience steps, hardest-stage training with continual rehearsal enabled.
+- Initial all-skills score: **0.5%**
+- Learner at end: **33.4%**
+- Repeat-confirmed Balanced Champion @ 100,096: **34.0%** on the benchmark suite
+- Observed rehearsal mix over final 160 episodes: **9.4% / 15.0% / 18.8% / 56.9%**, close to the 10/15/20/55 target.
+- Behavioral automatic rollbacks: **0**
 
-## Why this milestone exists
-
-Physical iPhone testing exposed two measurement problems rather than a lack of raw learning:
-
-1. a first migration could display `retention OK` even after the recalibrated historical Motor Nursery best was much higher, because forgetting was assessed before the old protected brain updated the baseline;
-2. at ~3.84M steps, the final unseen test showed Latest substantially outperforming Protected Balanced while the fixed skill validator still preferred the older protected policy.
-
-The correct response was to improve measurement and evidence handling, not enlarge the network.
-
-## Implemented
-
-- release identity `v0.1.1.1 / VALCAL-0111`;
-- checkpoint schema 4 with schema 1–4 reader support;
-- `validation:v3` protocol;
-- 12 fixed evaluation episodes per skill;
-- per-episode competence scoring;
-- 95%-style skill and balanced uncertainty ranges;
-- archive-protocol recalibration before Latest forgetting assessment;
-- preservation/re-evaluation of all unique v0.1.1 specialist archive models;
-- Restore Selected disabled while archive recalibration is pending;
-- first observation = WATCH, repeated evidence = CONFIRMED;
-- accelerated 25k follow-up validation while a watch is active;
-- automatic rollback only after repeat-confirmed balanced regression or multiple confirmed catastrophic skills;
-- single-skill specialization can block promotion without immediately destroying Latest;
-- separate `heldout:compare:v2` checkpoint-comparison domain;
-- separate `heldout:final:v2` final Unseen Test domain;
-- Unseen Test upgraded from current-stage-only to all four skills;
-- read-only same-weights validation measurement during final Unseen Test;
-- explicit validation/heldout conflict diagnostic;
-- final holdout cannot update archives, rollback state, optimizer, curriculum or validation history;
-- mobile Skill Retention panel now shows point estimate, range, WATCH/CONFIRMED severity and streak.
-
-## Automated verification
-
-- core tests: **34/34 PASS**
-- validation determinism: PASS
-- validation/compare/final seed-domain separation: PASS
-- confidence-bound integrity: PASS
-- WATCH→CONFIRMED repeated-evidence test: PASS
-- repeat-confirmed balanced recovery test: PASS
-- schema-4 roundtrip including legacy validation-history preservation: PASS
-- schema-3 v0.1.1 archive recalibration migration: PASS
-- schema-2 and schema-1 legacy migration: PASS
-- final Unseen Test non-mutating path audit: PASS
-- all-skills heldout evaluation: PASS
-- JavaScript syntax checks: PASS
-
-## Benchmark
-
-60k all-skills smoke on `benchmark:all-skills:v2`:
-
-- initial score: **4.3%**
-- latest ~60k: **37.7%**
-- protected ~50k: **36.9%**
-
-150k regression stress:
-
-- first destructive evidence at ~100k: WATCH only, no rollback;
-- repeated evidence at 125,184: CONFIRMED;
-- automatic recovery restored the protected ~50k policy while keeping total experience at 125,184;
-- recovery LR reduced to 1.2e-4.
-
-See `docs/BENCHMARK.md` for details.
-
-## Physical iPhone acceptance gate
-
-1. Save the current v0.1.1 long-run Manual checkpoint before deployment.
-2. Deploy v0.1.1.1 and refresh.
-3. Load Manual and verify the exact multi-million-step age.
-4. Confirm old protected specialist options remain visible but Restore Selected is disabled while calibration is pending.
-5. Resume once and wait for v3 archive recalibration.
-6. Verify ranges and retention status populate.
-7. Save Manual again after calibration to create a schema-4 checkpoint.
-8. Train through at least two validation events and verify a one-off WATCH does not auto-restore.
-9. Run one final Unseen Test and inspect any validation/heldout conflict message.
-10. Confirm Safari responsiveness and thermal behavior remain acceptable.
-
-## Known limitations
-
-- confidence ranges are approximate normal intervals over seeded stochastic episode competence;
-- validation is still finite and can mis-rank policies;
-- repeated human inspection of the final holdout can leak information into development decisions;
-- recurrence still lacks sequence BPTT/GRU credit assignment;
-- the system preserves/recovers policies externally rather than consolidating old skills internally;
-- no curiosity, world model, planning or language is added here.
+## Physical iPhone gate
+Load the existing v0.1.1.1 Manual Save, confirm the multi-million-step Learner and Champions survive schema-5 migration, then Resume. Verify:
+1. no automatic behavioral rollback during a regression;
+2. `rehearsal mix` includes earlier skills as curriculum advances;
+3. a superior Learner shows `Champion challenge 1/2` before promotion;
+4. only a second qualifying validation promotes it;
+5. final Unseen Test does not change Learner/Champion state.

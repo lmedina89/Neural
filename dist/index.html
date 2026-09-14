@@ -14,13 +14,13 @@
         <div class="eyebrow">MICROMIND • LEARNING LABORATORY</div>
         <h1>Watch a tiny brain actually learn.</h1>
       </div>
-      <div class="build" id="buildTag">v0.1.1.1 • VALCAL-0111</div>
+      <div class="build" id="buildTag">v0.1.2 • AUTOCONT-012</div>
     </header>
 
     <section class="controls" aria-label="Main controls">
       <button id="newBrain" title="Create a fresh randomly initialized brain. Unsaved progress is replaced.">New Brain</button>
-      <button id="learnBtn" class="primary" title="Train the latest brain with PPO in multiple procedural worlds.">Learn</button>
-      <button id="observeBtn" title="Watch Latest or Best brain act in a separate procedural world without training.">Observe</button>
+      <button id="learnBtn" class="primary" title="Train the active Learner with PPO across current challenges plus rehearsal of earlier skills.">Learn</button>
+      <button id="observeBtn" title="Watch the Learner or a frozen Champion act in a separate procedural world without training.">Observe</button>
       <button id="probeBtn" title="Freeze the world and move stimuli to inspect how the selected brain responds.">Probe</button>
       <button id="pauseBtn" title="Pause or resume the current mode.">Pause</button>
       <label class="selectLabel" title="Controls training duty cycle and heat/load on the browser.">Compute
@@ -30,14 +30,14 @@
           <option value="max">Max</option>
         </select>
       </label>
-      <label class="selectLabel" title="Choose which brain Observe/Probe uses. Learn always trains Latest.">View Brain
+      <label class="selectLabel" title="Choose which brain Observe/Probe uses. Learn always trains the autonomous Learner.">View Brain
         <select id="brainSource">
-          <option value="latest">Latest</option>
-          <option id="bestOption" value="balanced" disabled>Best Balanced (not validated yet)</option>
-          <option id="overallOption" value="overall" disabled>Best Overall</option>
-          <option id="foragerOption" value="forager" disabled>Best Forager</option>
-          <option id="survivorOption" value="survivor" disabled>Best Survivor</option>
-          <option id="efficiencyOption" value="efficiency" disabled>Best Efficiency</option>
+          <option value="latest">Learner (active)</option>
+          <option id="bestOption" value="balanced" disabled>Champion Balanced (not validated yet)</option>
+          <option id="overallOption" value="overall" disabled>Champion Overall</option>
+          <option id="foragerOption" value="forager" disabled>Champion Forager</option>
+          <option id="survivorOption" value="survivor" disabled>Champion Survivor</option>
+          <option id="efficiencyOption" value="efficiency" disabled>Champion Efficiency</option>
         </select>
       </label>
       <button id="saveBtn" title="Save the current session to the protected Manual Save slot. A higher-step manual save will not be overwritten by a lower-step brain.">Save Manual</button>
@@ -45,7 +45,7 @@
       <button id="loadAutosaveBtn" title="Load the automatic validation autosave explicitly. Loading pauses training so you can verify it before resuming.">Load Autosave</button>
       <button id="testBtn" title="Run the final held-out all-skills diagnostic. It never updates weights, archives, curriculum, or rollback state.">Unseen Test</button>
       <button id="compareBtn" title="Compare historical brains on a separate held-out comparison domain, preserving the final Unseen Test domain.">Compare Brains</button>
-      <button id="restoreBestBtn" title="Roll the trainable model and optimizer back to the best validated brain while keeping total experience steps monotonic." disabled>Restore Selected</button>
+      <button id="restoreBestBtn" title="Explicitly fork the Learner from the selected frozen Champion. This never happens automatically." disabled>Fork From Champion</button>
     </section>
     <section class="saveSlotsPanel" aria-label="Stored checkpoint slots">
       <div><b>MANUAL SAVE</b><span id="manualSlotInfo">Checking browser storage…</span></div>
@@ -56,21 +56,21 @@
       <summary>What do the controls and numbers mean?</summary>
       <div class="helpGrid">
         <div><b>New Brain</b><span>Fresh random network. Save first if you want to keep the current run.</span></div>
-        <div><b>Learn</b><span>Runs PPO training. The visible world is only one of several training environments.</span></div>
-        <div><b>Observe</b><span>Stops learning and watches the selected Latest/Best brain act at human speed.</span></div>
+        <div><b>Learn</b><span>Runs guarded PPO on the autonomous Learner. Earlier skills are continuously rehearsed alongside the current curriculum.</span></div>
+        <div><b>Observe</b><span>Stops learning and watches the selected Learner/Champion brain act at human speed.</span></div>
         <div><b>Probe</b><span>Freezes action. Move food/hazard/agent and inspect real policy changes.</span></div>
         <div><b>Compute</b><span>Eco reduces heat; Balanced is default; Max favors throughput.</span></div>
-        <div><b>View Brain</b><span>Latest is actively training. The protected archive separately preserves Balanced, Overall-return, Forager, Survivor, and Efficiency specialists.</span></div>
+        <div><b>View Brain</b><span>Learner changes continuously. Frozen Champions preserve repeatedly validated Balanced, Overall-return, Forager, Survivor, and Efficiency policies.</span></div>
         <div><b>Save Manual</b><span>Saves the current run to the manual slot. Recovery protection refuses to overwrite a manual brain with a lower-step brain.</span></div>
         <div><b>Load Manual / Autosave</b><span>Each stored slot is shown separately with its step count and timestamp. Loading pauses training for verification.</span></div>
         <div><b>Unseen Test</b><span>Final all-skills holdout. Diagnostic only: it never selects archives or triggers rollback. Use sparingly so human decisions do not overfit it.</span></div>
         <div><b>Compare Brains</b><span>Replays historical brains on a separate comparison-only holdout, not the final Unseen Test domain.</span></div>
-        <div><b>Restore Selected</b><span>Explicitly restore the selected protected archive brain + optimizer. Experience steps remain monotonic; this never happens automatically.</span></div>
+        <div><b>Fork From Champion</b><span>Optional manual experiment: start a new Learner lineage from a frozen Champion brain + optimizer. Experience age stays monotonic. Validation never does this automatically.</span></div>
         <div><b>Return</b><span>Recent average total reward. Higher is better, but reinforcement learning is noisy.</span></div>
         <div><b>Food</b><span>Recent average resources collected per episode.</span></div>
         <div><b>Entropy</b><span>Policy uncertainty/exploration. High means action probabilities are more spread out.</span></div>
         <div><b>Value</b><span>The critic's estimate of expected future return from the current state.</span></div>
-        <div><b>Validation</b><span>12 fixed seeds per skill plus confidence ranges. One bad result creates a watch; destructive rollback requires repeated evidence.</span></div>
+        <div><b>Validation</b><span>12 fixed seeds per skill plus confidence ranges. Retention warnings are observational; Champions require repeat-confirmed improvement before promotion.</span></div>
       </div>
     </details>
 
@@ -94,7 +94,7 @@
       <article class="panel brainPanel">
         <div class="panelHead">
           <strong>LIVE BRAIN</strong>
-          <div class="brainHeadControls"><span id="viewBrainBadge">LATEST</span><select id="brainView" aria-label="Brain visualization mode">
+          <div class="brainHeadControls"><span id="viewBrainBadge">LEARNER</span><select id="brainView" aria-label="Brain visualization mode">
             <option value="ACTIVE">Active</option>
             <option value="WEIGHTS">Weights</option>
             <option value="STRONGEST">Strongest</option>
@@ -121,9 +121,14 @@
         </div>
         <canvas id="chartCanvas" aria-label="Training return chart"></canvas>
         <div class="validationStrip">
-          <span>latest balanced <b id="latestValidation">—</b></span>
-          <span>protected balanced <b id="bestValidation">—</b></span>
+          <span>learner balanced <b id="latestValidation">—</b></span>
+          <span>champion balanced <b id="bestValidation">—</b></span>
           <span>retention <b id="retentionAlert">—</b></span>
+        </div>
+        <div class="validationStrip continualStrip">
+          <span>learner lineage <b id="lineageVal">—</b></span>
+          <span>rehearsal mix <b id="rehearsalVal">—</b></span>
+          <span>champion challenge <b id="promotionVal">—</b></span>
         </div>
       </article>
 
@@ -138,16 +143,16 @@
 
 
     <section class="panel skillPanel">
-      <div class="panelHead"><strong>SKILL RETENTION</strong><span>validation:v3 • 95% ranges • repeat-confirmed</span></div>
-      <div id="skillRetention" class="skillRetention">Waiting for v0.1.1.1 validation calibration…</div>
+      <div class="panelHead"><strong>SKILL RETENTION</strong><span>validation:v3 • observational only • 95% ranges</span></div>
+      <div id="skillRetention" class="skillRetention">Waiting for autonomous continual-learning validation…</div>
     </section>
 
     <section class="panel resultsPanel">
-      <div class="panelHead"><strong>EVALUATION / CHECKPOINTS</strong><span>validation selects • final holdout only diagnoses</span></div>
+      <div class="panelHead"><strong>EVALUATION / CHECKPOINTS</strong><span>validation promotes Champions • final holdout only diagnoses</span></div>
       <div id="resultsText" class="resultsText">No evaluation run yet.</div>
     </section>
 
-    <footer>MicroMind v0.1.1.1 uses a real recurrent actor-critic and guarded PPO. Validation and final holdout are separated; neural glow is measured instrumentation, not simulated “thought.”</footer>
+    <footer>MicroMind v0.1.2 uses an autonomous recurrent PPO Learner with continual rehearsal and frozen repeat-confirmed Champions. Validation observes/promotes; final holdout only diagnoses.</footer>
   </main>
   <script type="module" src="./src/app/main.js"></script>
 </body>
