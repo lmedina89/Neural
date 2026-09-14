@@ -1,33 +1,30 @@
-# Roadmap
+# MicroMind Roadmap
 
-## v0.1.0.1 — completed stabilization checkpoint
+## Completed foundation
 
-- protected best-generalization brains
-- validation/held-out seed separation
-- automatic validation autosaves
-- Latest vs Best Observe/Probe
-- explicit Restore Best
-- curriculum promotion/demotion hysteresis
-- curriculum transition markers
-- built-in mobile help
-- schema-1 migration from v0.1.0
+- genuine trainable recurrent actor-critic
+- procedural seeded worlds
+- real neural visualization
+- checkpoint history beyond 1M steps
+- separate validation / held-out seed domains
+- recovery-safe manual/autosave slots
+- protected best-brain system
+- v0.1.1 fixed skill-retention validation
+- v0.1.1 guarded PPO and catastrophic-forgetting recovery
+- v0.1.1 multi-objective specialist archive
 
-## next v0.1.x stabilization
+## Next candidate milestone
 
-Physical iPhone validation of long-run policy stability, thermal behavior, validation overhead, reward diagnostics, and sequence-safe recurrent training. Do not add major cognitive systems until this checkpoint is physically accepted.
+Do not choose the next milestone until v0.1.1 is physically tested on the long-running iPhone brain.
 
-## v0.2 curiosity
+Likely research directions after acceptance:
 
-Intrinsic novelty reward (RND-style or successor), separate intrinsic/extrinsic accounting, and exploration/generalization tests.
+1. **Continual-learning training**, not just rollback protection: rehearsal across earlier curricula, policy distillation or regularization against a retained teacher.
+2. **Better recurrent credit assignment:** sequence minibatches / truncated BPTT or a true GRU.
+3. **Intrinsic curiosity:** novelty reward with careful anti-exploit instrumentation.
+4. **Learned world model:** predict latent next state/reward before any imagined-future visualization is added.
+5. **Planning / imagined rollouts.**
+6. **Memory-specific tasks and delayed cues.**
+7. **Open-ended curriculum generation.**
 
-## v0.3 world model
-
-Learned latent dynamics and reward prediction. Only then add visualized imagined trajectories; no fake future paths.
-
-## v0.4 planning
-
-Short imagined rollouts, predictive uncertainty, and action selection using model predictions.
-
-## later
-
-Object-centric perception, longer memory, automatically generated curricula, multi-agent behavior, communication, grounded symbolic tasks, and controlled architecture/hyperparameter search.
+The project should continue favoring measurable capability over network size.

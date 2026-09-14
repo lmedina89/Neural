@@ -22,7 +22,7 @@ export function evaluateModel(model, stage, { episodes = CONFIG.runtime.evalEpis
   return summarizeRows(rows);
 }
 
-export function evaluateCurriculumSuite(model, maxStageIndex, {
+export function evaluateCurriculumSuite(model, maxStageIndex = CURRICULUM.length - 1, {
   episodesPerStage = CONFIG.validation.episodesPerStage,
   seedBase = CONFIG.validation.seedBase,
   deterministic = false,
@@ -37,17 +37,42 @@ export function evaluateCurriculumSuite(model, maxStageIndex, {
       seedBase: `${seedBase}:stage:${stageIndex}`,
       deterministic,
     });
-    stageResults.push({ stage: stageIndex, name: stage.name, ...withoutRows(result) });
+    const skillScore = skillScoreFor(result, stage);
+    stageResults.push({ stage: stageIndex, name: stage.name, skillScore, ...withoutRows(result) });
     allRows.push(...result.rows);
   }
   const summary = summarizeRows(allRows);
+  const balancedScore = stageResults.length ? stageResults.reduce((s, x) => s + x.skillScore, 0) / stageResults.length : 0;
+  const categoryScores = {
+    overall: summary.meanReturn,
+    forager: summary.meanFood,
+    survivor: summary.survivalRate,
+    efficiency: summary.meanEnergy,
+    balanced: balancedScore,
+  };
   return {
     ...withoutRows(summary),
-    score: summary.meanReturn,
+    score: balancedScore,
+    balancedScore,
+    categoryScores,
     maxStage,
-    protocol: `${seedBase}|0-${maxStage}|${episodesPerStage}|${deterministic ? 'det' : 'seeded-stochastic'}`,
+    protocol: `${seedBase}|0-${maxStage}|${episodesPerStage}|${deterministic ? 'det' : 'seeded-stochastic'}|retention-v2`,
     stageResults,
   };
+}
+
+export function evaluateFullRetentionSuite(model, options = {}) {
+  return evaluateCurriculumSuite(model, CURRICULUM.length - 1, options);
+}
+
+function skillScoreFor(result, stage) {
+  // Bounded competence score: resource acquisition is primary, but survival and
+  // remaining energy matter so "do nothing" and reckless foraging cannot dominate.
+  const foodScale = Math.max(0.75, Number(stage.foods) || 1);
+  const foodScore = 1 - Math.exp(-Math.max(0, result.meanFood) / foodScale);
+  const survival = clamp01(result.survivalRate);
+  const energy = clamp01(result.meanEnergy);
+  return clamp01(0.58 * foodScore + 0.30 * survival + 0.12 * energy);
 }
 
 function summarizeRows(rows) {
@@ -71,3 +96,5 @@ function withoutRows(result) {
   const { rows, ...rest } = result;
   return rest;
 }
+
+function clamp01(x) { return Math.max(0, Math.min(1, Number(x) || 0)); }

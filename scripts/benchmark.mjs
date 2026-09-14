@@ -14,10 +14,26 @@ let nextPrint = 10000;
 while (session.totalSteps < target) {
   const { metric, validation } = session.trainRollout(32);
   if (session.totalSteps >= nextPrint) {
-    console.log('train', session.totalSteps, { return: metric.meanReturn.toFixed(3), food: metric.meanFood.toFixed(3), entropy: metric.entropy.toFixed(3) });
+    console.log('train', session.totalSteps, {
+      return: metric.meanReturn.toFixed(3),
+      food: metric.meanFood.toFixed(3),
+      entropy: metric.entropy.toFixed(3),
+      lr: metric.learningRate.toExponential(2),
+      kl: metric.maxEpochKL.toFixed(4),
+      epochs: metric.epochsRun,
+      rejected: metric.updateRejected,
+    });
     nextPrint += 10000;
   }
-  if (validation) console.log('validation', { steps: validation.steps, score: validation.validation.score.toFixed(3), improved: validation.improved, regression: validation.regression, best: validation.bestScore.toFixed(3) });
+  if (validation) console.log('validation', {
+    steps: validation.steps,
+    balanced: validation.validation.score.toFixed(3),
+    improved: validation.improved,
+    regression: validation.regression,
+    forgetting: validation.forgetting.map(x => x.name),
+    autoRollback: validation.autoRollback?.sourceSteps ?? null,
+    best: validation.bestScore.toFixed(3),
+  });
 }
 
 const latest = evaluateModel(session.model, stage, evalOptions);
@@ -29,19 +45,33 @@ if (session.bestBrain?.model) {
 }
 
 console.log('latest', summary(latest));
-console.log('protected best', { checkpointSteps: session.bestBrain?.savedAtSteps ?? null, ...summary(protectedBest) });
+console.log('protected balanced', { checkpointSteps: session.bestBrain?.savedAtSteps ?? null, ...summary(protectedBest) });
 
 const report = {
   trainingSteps: session.totalSteps,
   initial: summaryNumbers(initial),
   latest: summaryNumbers(latest),
-  protectedBest: protectedBest ? { steps: session.bestBrain.savedAtSteps, ...summaryNumbers(protectedBest) } : null,
-  validations: session.validationHistory.map(v => ({ steps: v.steps, score: v.validation.score, improved: v.improved, regression: v.regression, bestScore: v.bestScore })),
+  protectedBalanced: protectedBest ? { steps: session.bestBrain.savedAtSteps, ...summaryNumbers(protectedBest) } : null,
+  rollbacks: session.rollbackHistory,
+  archive: session.archiveSummary(),
+  validations: session.validationHistory.map(v => ({
+    steps: v.steps,
+    balanced: v.validation.score,
+    improved: v.improved,
+    regression: v.regression,
+    forgetting: v.forgetting.map(x => x.stage),
+    autoRollback: v.autoRollback,
+    bestScore: v.bestScore,
+  })),
 };
 console.log('summary-json', JSON.stringify(report));
 
 if (!protectedBest || protectedBest.meanReturn <= initial.meanReturn) {
-  console.error('Benchmark failed: protected best did not improve held-out return over the initial policy.');
+  console.error('Benchmark failed: protected balanced brain did not improve held-out return over the initial policy.');
+  process.exitCode = 1;
+}
+if (latest.meanReturn <= initial.meanReturn) {
+  console.error('Benchmark failed: latest policy did not improve over initial held-out return after stability recovery.');
   process.exitCode = 1;
 }
 

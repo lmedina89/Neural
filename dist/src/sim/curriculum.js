@@ -17,7 +17,7 @@ export class CurriculumManager {
 
   current() { return CURRICULUM[this.stage]; }
 
-  noteEpisode({ food, survived }, episodeNumber = 0) {
+  noteEpisode({ food, survived }, episodeNumber = 0, { promotionAllowed = true, gateReason = null } = {}) {
     const cfg = CONFIG.curriculum;
     const score = Math.min(1, food / Math.max(1, this.current().foods)) * 0.8 + (survived ? 0.2 : 0);
     this.history.push(score);
@@ -32,8 +32,12 @@ export class CurriculumManager {
     let to = this.stage;
     let reason = null;
     if (avg > cfg.promoteThreshold && this.stage < CURRICULUM.length - 1) {
-      to = this.stage + 1;
-      reason = 'promotion';
+      if (promotionAllowed) {
+        to = this.stage + 1;
+        reason = 'promotion';
+      } else {
+        reason = 'promotion-blocked';
+      }
     } else if (avg < cfg.demoteThreshold && this.stage > 0) {
       to = this.stage - 1;
       reason = 'demotion';
@@ -41,10 +45,10 @@ export class CurriculumManager {
     if (!reason) return null;
 
     const from = this.stage;
-    this.stage = to;
+    if (reason !== 'promotion-blocked') this.stage = to;
     this.history.length = 0;
-    this.cooldownRemaining = cfg.transitionCooldownEpisodes;
-    const event = { from, to, reason, avg, episode: episodeNumber };
+    this.cooldownRemaining = reason === 'promotion-blocked' ? cfg.blockedPromotionCooldownEpisodes : cfg.transitionCooldownEpisodes;
+    const event = { from, to: this.stage, reason, avg, episode: episodeNumber, gateReason };
     this.transitions.push(event);
     if (this.transitions.length > 64) this.transitions.shift();
     return event;

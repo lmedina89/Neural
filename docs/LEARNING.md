@@ -1,33 +1,30 @@
-# What is learned vs programmed
+# What MicroMind Learns — v0.1.1
 
-## Programmed
+The environment defines physics, sensors, rewards and curriculum worlds. There is no hidden rule saying which direction to turn toward food or how to avoid an obstacle.
 
-World physics, collision rules, sensors, energy accounting, reward definitions, PPO itself, procedural generation, curriculum thresholds, validation schedules, and the neural architecture are code.
+The actor-critic learns its policy/value weights from on-policy experience. The recurrent state is computed from real observations and the previous hidden state.
 
-The protected-best mechanism is also engineering logic: it measures policies on fixed unseen validation worlds and retains the strongest checkpoint. It does not improve a policy by itself.
+## What v0.1.1 adds to learning
 
-## Learned
+The training objective is still PPO, but a candidate update is no longer accepted blindly. KL limits constrain destructive optimizer moves, while a fixed external validation protocol checks whether useful behavior survives across all learned task stages.
 
-The numerical neural parameters connecting observations, recurrent state, policy outputs, and value estimate are optimized from experience. There is no policy rule such as “if food is left, turn left.”
+The system distinguishes:
 
-The introductory curriculum includes a configurable approach-to-food shaping reward. It is intentionally visible in configuration because dense shaping can create unintended strategies.
+- **training performance** — recent episodes in the active curriculum;
+- **validation skill retention** — fixed `validation:v2` worlds never used for training;
+- **held-out testing** — a separate `heldout:v1` domain used only when the user runs Unseen Test / Compare Brains.
 
-## Why Latest can become worse
+This separation is critical: validation may select/protect a brain, but the final held-out worlds do not participate in that selection.
 
-PPO is an optimization process, not a monotonic intelligence meter. A later update can damage behavior that an earlier policy had learned, particularly when the task distribution changes with curriculum progression. v0.1.0 physical testing demonstrated exactly this kind of regression.
+## Skill retention score
 
-v0.1.0.1 therefore distinguishes:
+Each curriculum stage gets a bounded competence score composed primarily of food acquisition plus survival and remaining energy. It is diagnostic, not a claim of intelligence or consciousness.
 
-- **Latest** — the policy still being updated
-- **Best** — the highest validated policy preserved for the current curriculum validation protocol
+A catastrophic-forgetting alert requires both:
 
-This lets MicroMind display forgetting/regression instead of hiding it.
+1. the skill previously achieved meaningful competence; and
+2. its current score falls by more than the configured tolerance.
 
-## Generalization layers
+## Known limitation
 
-MicroMind now has two unseen-data checks:
-
-1. `validation:v1` — automatic bounded checks used for best-brain protection.
-2. `heldout:v1` — manual Unseen Test and checkpoint comparison. These worlds are kept separate from validation so the policy-selection process cannot directly optimize against the final held-out display set.
-
-Neither domain is used for PPO training.
+v0.1.1 improves policy preservation but does not solve continual learning in the research sense. Automatic recovery can return to a known good policy; it does not yet make the network internally consolidate old skills while learning new ones. Rehearsal, distillation, elastic-weight regularization, sequence training and learned world models remain future experiments.

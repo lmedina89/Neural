@@ -7,11 +7,6 @@ function zerosLike(params) {
   return o;
 }
 function zeroGrad(g) { for (const v of Object.values(g)) v.fill(0); }
-function gradNorm(g) {
-  let s = 0;
-  for (const arr of Object.values(g)) for (const x of arr) s += x * x;
-  return Math.sqrt(s);
-}
 function shuffleIndices(n, rng) {
   const a = Array.from({ length: n }, (_, i) => i);
   for (let i = n - 1; i > 0; i--) {
@@ -20,6 +15,15 @@ function shuffleIndices(n, rng) {
   }
   return a;
 }
+function cloneArrays(obj) {
+  const out = {};
+  for (const [k, v] of Object.entries(obj)) out[k] = new Float64Array(v);
+  return out;
+}
+function restoreArrays(target, source) {
+  for (const k of Object.keys(target)) if (source[k]?.length === target[k].length) target[k].set(source[k]);
+}
+function clamp(x, a, b) { return Math.max(a, Math.min(b, x)); }
 
 export class PPOTrainer {
   constructor(model, seed = 9876) {
@@ -28,10 +32,13 @@ export class PPOTrainer {
     this.m = zerosLike(model.params);
     this.v = zerosLike(model.params);
     this.t = 0;
+    this.learningRate = CONFIG.ppo.learningRate;
     this.lastStats = {};
+    this.rejectedUpdates = 0;
+    this.lrCooldownUpdates = 0;
   }
 
-  update(transitions, advantages, returns) {
+  update(transitions, advantages, returns, { trainingStep = 0 } = {}) {
     if (!transitions.length) return {};
     const cfg = CONFIG.ppo;
     let mean = 0;
@@ -43,11 +50,31 @@ export class PPOTrainer {
     const normAdv = new Float64Array(advantages.length);
     for (let i = 0; i < advantages.length; i++) normAdv[i] = (advantages[i] - mean) / sd;
 
+    const baseEntropyCoef = entropyCoefficient(trainingStep);
+    const priorEntropy = Number(this.lastStats.entropy);
+    const rescueMultiplier = Number.isFinite(priorEntropy) && priorEntropy < cfg.entropyRescueCritical
+      ? cfg.entropyRescueCriticalMultiplier
+      : Number.isFinite(priorEntropy) && priorEntropy < cfg.entropyRescueLow
+        ? cfg.entropyRescueLowMultiplier
+        : 1;
+    const entropyCoef = Math.min(cfg.maxEntropyCoef, baseEntropyCoef * rescueMultiplier);
+    const modelBefore = cloneArrays(this.model.params);
+    const mBefore = cloneArrays(this.m);
+    const vBefore = cloneArrays(this.v);
+    const tBefore = this.t;
+    const lrBefore = this.learningRate;
+
     const g = zerosLike(this.model.params);
     let accPolicy = 0, accValue = 0, accEntropy = 0, accKL = 0, clippedCount = 0, sampleCount = 0;
+    let epochsRun = 0;
+    let earlyStopped = false;
+    let updateRejected = false;
+    let maxEpochKL = 0;
 
     for (let epoch = 0; epoch < cfg.epochs; epoch++) {
       const idx = shuffleIndices(transitions.length, this.rng);
+      let epochKL = 0;
+      let epochSamples = 0;
       for (let start = 0; start < idx.length; start += cfg.minibatchSize) {
         zeroGrad(g);
         const end = Math.min(idx.length, start + cfg.minibatchSize);
@@ -58,10 +85,12 @@ export class PPOTrainer {
           const f = this.model.forward(tr.obs, tr.hPrev);
           const pAct = Math.max(1e-12, f.probs[tr.action]);
           const logp = Math.log(pAct);
-          const ratio = Math.exp(logp - tr.logProb);
+          const logRatio = logp - tr.logProb;
+          const ratio = Math.exp(logRatio);
+          const approxKL = Math.max(0, (ratio - 1) - logRatio);
           const a = normAdv[n];
           const unclipped = ratio * a;
-          const clippedRatio = Math.max(1 - cfg.clip, Math.min(1 + cfg.clip, ratio));
+          const clippedRatio = clamp(ratio, 1 - cfg.clip, 1 + cfg.clip);
           const clippedObj = clippedRatio * a;
           const policyLoss = -Math.min(unclipped, clippedObj);
           const isClipped = (a >= 0 && ratio > 1 + cfg.clip) || (a < 0 && ratio < 1 - cfg.clip);
@@ -75,7 +104,7 @@ export class PPOTrainer {
           const dLogits = new Float64Array(f.probs.length);
           for (let k = 0; k < dLogits.length; k++) {
             dLogits[k] = dLogP * ((k === tr.action ? 1 : 0) - f.probs[k]);
-            dLogits[k] += cfg.entropyCoef * f.probs[k] * (Math.log(Math.max(1e-12, f.probs[k])) + entropy);
+            dLogits[k] += entropyCoef * f.probs[k] * (Math.log(Math.max(1e-12, f.probs[k])) + entropy);
           }
           const dValue = cfg.valueCoef * valueErr;
 
@@ -106,23 +135,62 @@ export class PPOTrainer {
           accPolicy += policyLoss;
           accValue += valueLoss;
           accEntropy += entropy;
-          accKL += tr.logProb - logp;
+          accKL += approxKL;
+          epochKL += approxKL;
           sampleCount++;
+          epochSamples++;
           batchCount++;
         }
         this.applyAdam(g, 1 / Math.max(1, batchCount));
       }
+
+      epochsRun++;
+      const meanEpochKL = epochKL / Math.max(1, epochSamples);
+      maxEpochKL = Math.max(maxEpochKL, meanEpochKL);
+      if (meanEpochKL > cfg.hardKL) {
+        restoreArrays(this.model.params, modelBefore);
+        restoreArrays(this.m, mBefore);
+        restoreArrays(this.v, vBefore);
+        this.t = tBefore;
+        this.learningRate = Math.max(cfg.minLearningRate, lrBefore * 0.5);
+        this.rejectedUpdates++;
+        updateRejected = true;
+        earlyStopped = true;
+        break;
+      }
+      if (meanEpochKL > cfg.targetKL) {
+        earlyStopped = true;
+        break;
+      }
     }
+
+    if (!updateRejected) {
+      if (maxEpochKL > cfg.targetKL * 1.25) {
+        this.learningRate = Math.max(cfg.minLearningRate, this.learningRate * cfg.lrDecrease);
+      } else if (this.lrCooldownUpdates <= 0 && maxEpochKL < cfg.targetKL * 0.35) {
+        this.learningRate = Math.min(cfg.maxLearningRate, this.learningRate * cfg.lrIncrease);
+      }
+    }
+    if (this.lrCooldownUpdates > 0) this.lrCooldownUpdates--;
 
     const denom = Math.max(1, sampleCount);
     this.lastStats = {
       policyLoss: accPolicy / denom,
       valueLoss: accValue / denom,
       entropy: accEntropy / denom,
+      entropyCoef,
+      entropyRescueMultiplier: rescueMultiplier,
+      lrCooldownUpdates: this.lrCooldownUpdates,
       approxKL: accKL / denom,
+      maxEpochKL,
       clipFraction: clippedCount / denom,
       advantageMean: mean,
       advantageStd: sd,
+      learningRate: this.learningRate,
+      epochsRun,
+      earlyStopped,
+      updateRejected,
+      rejectedUpdates: this.rejectedUpdates,
     };
     return this.lastStats;
   }
@@ -143,24 +211,45 @@ export class PPOTrainer {
         v[i] = cfg.adamBeta2 * v[i] + (1 - cfg.adamBeta2) * grad * grad;
         const mh = m[i] / (1 - Math.pow(cfg.adamBeta1, this.t));
         const vh = v[i] / (1 - Math.pow(cfg.adamBeta2, this.t));
-        p[i] -= cfg.learningRate * mh / (Math.sqrt(vh) + cfg.adamEps);
+        p[i] -= this.learningRate * mh / (Math.sqrt(vh) + cfg.adamEps);
         if (!Number.isFinite(p[i])) throw new Error(`Non-finite parameter ${k}[${i}]`);
       }
     }
   }
 
+  enterRecoveryCooldown(updates = CONFIG.ppo.lrRecoveryCooldownUpdates) {
+    this.lrCooldownUpdates = Math.max(this.lrCooldownUpdates, Math.max(0, Number(updates) || 0));
+  }
+
   serialize() {
     const pack = o => Object.fromEntries(Object.entries(o).map(([k, v]) => [k, Array.from(v)]));
-    return { t: this.t, m: pack(this.m), v: pack(this.v), lastStats: this.lastStats };
+    return {
+      t: this.t,
+      m: pack(this.m),
+      v: pack(this.v),
+      learningRate: this.learningRate,
+      rejectedUpdates: this.rejectedUpdates,
+      lrCooldownUpdates: this.lrCooldownUpdates,
+      lastStats: this.lastStats,
+    };
   }
 
   restore(data) {
     if (!data) return;
     this.t = data.t || 0;
     this.lastStats = data.lastStats || {};
+    this.learningRate = clamp(Number(data.learningRate) || CONFIG.ppo.learningRate, CONFIG.ppo.minLearningRate, CONFIG.ppo.maxLearningRate);
+    this.rejectedUpdates = Math.max(0, Number(data.rejectedUpdates) || 0);
+    this.lrCooldownUpdates = Math.max(0, Number(data.lrCooldownUpdates) || 0);
     for (const k of Object.keys(this.m)) {
       if (data.m?.[k]?.length === this.m[k].length) this.m[k].set(data.m[k]);
       if (data.v?.[k]?.length === this.v[k].length) this.v[k].set(data.v[k]);
     }
   }
+}
+
+function entropyCoefficient(trainingStep) {
+  const cfg = CONFIG.ppo;
+  const t = clamp((Number(trainingStep) || 0) / Math.max(1, cfg.entropyDecaySteps), 0, 1);
+  return cfg.entropyStart + (cfg.entropyEnd - cfg.entropyStart) * t;
 }

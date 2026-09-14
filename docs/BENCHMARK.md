@@ -1,24 +1,25 @@
-# Controlled learning/stability benchmark — v0.1.0.1.1 HISTCONT-01011
+# v0.1.1 Benchmark
 
-A reproducible smoke benchmark was run with:
+Release benchmark seed: `424242`.
 
-- brain seed: `424242`
-- curriculum: Stage 0 / Motor Nursery (automatic curriculum disabled for the benchmark)
-- training environments: 8
-- training steps: 60,160
-- held-out evaluation episodes: 32
-- held-out seed domain: `heldout:v1`
-- automatic validation domain: `validation:v1`
-- evaluation policy: stochastic categorical policy with deterministic per-seed RNG
+The benchmark trains on the Motor Nursery domain and evaluates on a separate fixed `heldout:v1` domain. This is a smoke/learning-stability experiment, not a claim of broad general intelligence.
 
-## Results
+## 60k release smoke
 
-| Policy | Source step | Mean held-out return | Food | Survival |
-| --- | ---: | ---: | ---: | ---: |
-| Initial | 0 | -9.674 | 0.094 | 0.0% |
-| Latest after training | 60,160 | -0.761 | 0.156 | 15.6% |
-| Protected Best | 50,176 | **1.211** | **1.344** | **78.1%** |
+A representative release run reached approximately:
 
-Automatic validation selected new bests at 10,240 steps (validation score `0.721`) and 50,176 steps (`1.443`). The later 60,160-step policy had regressed substantially on the independent held-out set, while the 50,176-step protected policy retained strong performance.
+- initial held-out return: **-9.674**
+- initial food: **0.094**
+- initial survival: **0%**
+- latest at ~60k return: **+2.93**
+- latest food: **2.78**
+- latest survival: **96.9%**
+- protected Balanced at ~50k return: **+2.64**
 
-This is exactly the failure mode v0.1.0.1 is designed to expose and protect against. It does **not** prove the validation score will always predict held-out performance, and it is not evidence of general intelligence. It does demonstrate that the protected-best mechanism can preserve a materially better policy when later PPO updates degrade the live learner.
+## 150k stress observation
+
+The longer deterministic training experiment intentionally exposed the instability that motivated this milestone. A strong ~50k policy later forgot earlier competence. v0.1.1 detected the loss in the fixed all-skills suite and restored the protected Balanced policy while keeping the experience counter monotonic and reducing the optimizer learning rate.
+
+Follow-up validations are shortened to 25k-step intervals during recovery. Catastrophic-forgetting alarms can trigger the same guard even when the aggregate balanced-score regression alone has not yet crossed its threshold.
+
+This is an important distinction: **v0.1.1 does not claim PPO can no longer regress. It detects and contains regressions much earlier and preserves usable policies while we study the root continual-learning problem.**

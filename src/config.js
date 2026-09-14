@@ -1,5 +1,5 @@
-export const VERSION = '0.1.0.1.2';
-export const BUILD_MARKER = 'SAVEREC-01012';
+export const VERSION = '0.1.1';
+export const BUILD_MARKER = 'STABRET-011';
 
 export const CONFIG = Object.freeze({
   world: {
@@ -45,10 +45,24 @@ export const CONFIG = Object.freeze({
   ppo: {
     gamma: 0.985,
     lambda: 0.94,
-    clip: 0.2,
-    entropyCoef: 0.03,
+    clip: 0.12,
+    entropyStart: 0.03,
+    entropyEnd: 0.008,
+    entropyDecaySteps: 5_000_000,
     valueCoef: 0.5,
-    learningRate: 0.0003,
+    learningRate: 0.00015,
+    minLearningRate: 0.00005,
+    maxLearningRate: 0.0002,
+    targetKL: 0.008,
+    hardKL: 0.025,
+    lrDecrease: 0.55,
+    lrIncrease: 1.005,
+    lrRecoveryCooldownUpdates: 240,
+    entropyRescueLow: 1.25,
+    entropyRescueCritical: 0.95,
+    entropyRescueLowMultiplier: 1.8,
+    entropyRescueCriticalMultiplier: 3.0,
+    maxEntropyCoef: 0.08,
     adamBeta1: 0.9,
     adamBeta2: 0.999,
     adamEps: 1e-8,
@@ -60,14 +74,21 @@ export const CONFIG = Object.freeze({
     historySize: 48,
     minSamples: 32,
     transitionCooldownEpisodes: 64,
+    blockedPromotionCooldownEpisodes: 24,
     promoteThreshold: 0.72,
     demoteThreshold: 0.18,
+    promotionSkillFloor: 0.42,
   },
   validation: {
-    seedBase: 'validation:v1',
+    seedBase: 'validation:v2',
     episodesPerStage: 8,
-    regressionTolerance: 0.35,
-    improvementEpsilon: 0.01,
+    regressionTolerance: 0.12,
+    improvementEpsilon: 0.004,
+    forgettingTolerance: 0.18,
+    forgettingFloor: 0.45,
+    autoRollback: true,
+    rollbackLearningRateFactor: 0.6,
+    recoveryValidationInterval: 25_000,
     schedule: [10000, 50000, 100000, 250000, 500000, 750000, 1000000],
     intervalAfterSchedule: 250000,
   },

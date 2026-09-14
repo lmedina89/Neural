@@ -1,90 +1,76 @@
-# Architecture — MicroMind v0.1.0.1.1
+# Architecture — v0.1.1
 
-MicroMind is split into simulation, learning, evaluation, persistence, and visualization layers.
+## Runtime loop
 
-## Simulation
+Eight procedural training worlds feed a shared recurrent actor-critic. Each training rollout gathers on-policy transitions, computes GAE, performs guarded PPO updates, records metrics, captures historical milestone brains, and runs fixed validation when scheduled.
 
-`World` owns continuous 2D motion, finite energy, food, walls, hazards, ray sensors, rewards, and procedural generation. All random generation uses a seeded PRNG. Episode info now carries the curriculum stage identity so stale environments finishing after a stage transition cannot incorrectly vote on the new stage.
+Rendering, training and observation are decoupled. Only one world is rendered; training worlds remain headless.
 
-## Observation vector
+## Model
 
-1. egocentric food X
-2. egocentric food Y
-3. food distance
-4. left danger ray
-5. forward danger ray
-6. right danger ray
-7. speed
-8. angular velocity
-9. energy
-10. constant bias/context channel
+The model remains unchanged from the accepted foundation:
 
-## Policy/value model
+- 10 numerical observations
+- 24 recurrent tanh state units
+- 7-action policy head
+- scalar value head
+- 1,040 trainable parameters
 
-A 24-unit tanh recurrent state receives the observation and previous recurrent state. It feeds a 7-action categorical policy and scalar value head. This is intentionally small enough to visualize.
+The recurrent hidden state is real and feeds the next timestep. v0.1.1 still uses the compact stop-gradient-through-time update baseline rather than full sequence BPTT; that limitation is intentional and remains a candidate for a later learning-system milestone.
 
-## PPO
+## PPO stability controller
 
-Rollouts retain observation, previous recurrent state, action, old log probability, reward, done flag, and value. GAE computes advantages/returns. PPO uses clipped policy loss, entropy regularization, value loss, Adam, minibatches, and gradient clipping.
+`src/ai/ppo.js` owns optimizer-level protections:
 
-### Recurrent limitation retained intentionally
+- normalized advantages;
+- clipped PPO objective (`clip=0.12`);
+- gradient-norm clipping;
+- Adam with state persisted in checkpoints;
+- adaptive learning rate constrained to 5e-5…2e-4;
+- target KL 0.008;
+- hard KL 0.025;
+- early epoch termination above target KL;
+- exact whole-update rollback above hard KL;
+- entropy schedule and adaptive entropy rescue;
+- post-recovery learning-rate cooldown.
 
-The stored recurrent state is treated as a stop-gradient input during each PPO sample update. Recurrent weights are trainable and state carries across timesteps, but gradients are not propagated backward through long sequences. v0.1.0.1.1 deliberately does not alter this while solving policy-stability and checkpoint-protection issues. Sequence minibatches/truncated BPTT remain a later research milestone.
+A hard-KL rejection restores both model parameters and optimizer moment state, so a rejected candidate does not quietly leave optimizer damage behind.
 
-## Seed domains
+## Fixed retention protocol
 
-The project now uses distinct deterministic domains for different purposes:
+`src/evaluation/evaluator.js` evaluates all four curriculum stages using a fixed `validation:v2` seed domain. The protocol no longer changes with the current curriculum stage.
 
-- training: `train:<brain-seed>`
-- automatic validation: `validation:v1`
-- manual held-out evaluation: `heldout:v1`
-- observation/demo worlds: `observe:v2`
+Each stage reports return, food, survival, energy, collision data and a bounded `skillScore`. The average stage skill score is the `balanced` score used by the primary protection guard.
 
-Validation and held-out worlds are never inserted into PPO rollouts.
+Separate category metrics are also exposed for Overall return, Forager, Survivor and Efficiency archives.
 
-## Automatic validation and best-brain protection
+## Catastrophic forgetting
 
-`TrainingSession.runValidation()` evaluates a fixed curriculum suite from stage 0 through the current stage. Each curriculum depth has a distinct protocol identity. The best policy for each protocol is retained in `bestBrains`, so a temporary curriculum demotion does not erase an older best from another protocol.
+`TrainingSession` stores the strongest validated skill score observed for each stage. If a skill that previously exceeded the competence floor falls by more than the configured forgetting tolerance, the validation record reports catastrophic forgetting.
 
-A validation record stores:
+Curriculum promotion is permitted only when prior/current validated stages remain above the promotion skill floor and no earlier-stage forgetting alarm is active.
 
-- validation score (`meanReturn` across the suite)
-- food, survival, energy, hazard/wall metrics
-- per-stage results
-- source training step
-- whether it improved the protected best
-- whether it crossed the regression threshold
+## Protected archive
 
-The current protected best additionally stores model parameters, optimizer state, and curriculum state. Later policies may become worse; they do not overwrite the protected snapshot.
+v0.1.1 stores five independent candidate brains. Each archive record contains model parameters, optimizer state, curriculum state, validation results, source and training age.
 
-Validation runs around 10k, 50k, 100k, 250k, 500k, 750k, 1M steps and every 250k thereafter, plus curriculum transitions. Exact execution can occur just after a threshold because PPO rollouts advance in batches.
+`bestBrain` remains an alias for Best Balanced for backwards-friendly UI behavior.
 
-When migrating a v0.1.0 save, the first resumed training call validates the existing policy before further experience can change the curriculum. This is specifically intended to protect long-running v0.1.0 experiments.
+## Validation recovery
 
-## Curriculum hysteresis
+If validation reports a severe balanced regression or catastrophic forgetting, the training policy is restored from Best Balanced without rewinding `totalSteps`. The current curriculum stage is retained. The restored optimizer receives a reduced learning rate and a recovery cooldown. A 25k-step follow-up validation window is armed.
 
-The curriculum uses a bounded rolling score based on food acquisition and survival. Promotion and demotion thresholds are intentionally separated. After any transition, a cooldown prevents immediate stage oscillation.
+This event is recorded in `rollbackHistory` with `automatic: true`.
 
-Only episodes actually generated under the current curriculum stage are allowed to influence the stage manager.
+## Save schema
 
-## Persistence
+Schema 3 adds:
 
-Checkpoint schema 2 adds:
+- `bestArchive`
+- `lastSkillValidation`
+- `skillBestScores`
+- `retentionStatus`
+- pending legacy-best migration state
+- guarded optimizer learning-rate/cooldown state
 
-- protected best brains by validation protocol
-- validation history
-- next/last validation step
-- explicit best-restore history
-- curriculum transition/cooldown state
-
-Schema 1 from v0.1.0 is still accepted.
-
-Manual saves use IndexedDB id `latest`. Automatic validation autosaves use id `autosave`. The Load control chooses whichever record has the newest timestamp.
-
-## Visualization data flow
-
-The brain renderer reads the exact observation vector, current recurrent activations, policy probabilities, value estimate, and parameter arrays from the selected model. Connection brightness is based on actual activation × weight contribution; weight mode is based on actual learned weight magnitude/sign.
-
-LEARN always displays and trains **Latest**. OBSERVE and PROBE can switch between **Latest** and the current protocol's protected **Best**.
-
-The training chart adds curriculum transition lines and validation markers. No visualization value is substituted for model/runtime state.
+Schemas 1 and 2 remain readable.

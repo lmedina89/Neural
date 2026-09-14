@@ -1,88 +1,107 @@
-# MicroMind v0.1.0.1.2 — Recovery-Safe Save Slots Hotfix
+# MicroMind v0.1.1 — Learning Stability & Skill Retention
 
-**Build:** `SAVEREC-01012`
+**Build:** `STABRET-011`
 
-MicroMind is a browser-based miniature reinforcement-learning laboratory. A small recurrent actor-critic learns to forage, conserve energy, and avoid hazards in deterministic procedurally generated worlds. The world, neural activations, learned weights, policy probabilities, recurrent state, value estimate, rewards, validation history, and historical brains are exposed for inspection.
+MicroMind is a browser-based reinforcement-learning laboratory built around a deliberately tiny, inspectable recurrent actor-critic. v0.1.1 keeps the same 1,040-parameter brain and the same physical world from the accepted v0.1.0.1.2 baseline. The milestone targets a problem observed during real iPhone training: a useful policy could learn a strong foraging/survival strategy and then partially destroy it tens of thousands of PPO steps later.
 
-v0.1.0.1.2 contains the full v0.1.0.1 stabilization update and v0.1.0.1.1 extended-history hotfix, plus a narrowly scoped recovery-safe save-slot fix. It is built for direct upgrade from v0.1.0. It does not add curiosity or a world model. It protects good policies from being lost silently during later PPO training and makes the controls easier to understand on mobile.
+## What changed
 
-## Run
+### Fixed all-skills validation
+Automatic validation no longer changes its definition when the curriculum changes. Every validation evaluates the current policy on all four fixed curriculum stages:
 
-This project has no runtime dependencies.
+- Motor Nursery
+- Foraging
+- Obstacle Avoidance
+- Scarcity
+
+Each stage produces a bounded skill-retention score. This makes earlier competence measurable after the curriculum advances.
+
+### Catastrophic-forgetting detection
+MicroMind tracks the strongest validated score previously seen for each skill. A sufficiently large drop from a previously competent skill is reported as catastrophic forgetting.
+
+Curriculum promotion is gated: a learner cannot advance just because its current-stage episode score is high if earlier validated skills have collapsed.
+
+### Protected specialist archive
+Instead of one scalar Best brain, v0.1.1 maintains separate protected candidates for:
+
+- Best Balanced
+- Best Overall return
+- Best Forager
+- Best Survivor
+- Best Efficiency
+
+Observe and Probe can inspect any available protected specialist. Manual restoration is still available.
+
+### Guarded PPO
+The PPO update path now includes:
+
+- a smaller clipping range;
+- a lower conservative learning-rate range;
+- target-KL epoch early stopping;
+- hard-KL update rejection with exact parameter/optimizer rollback;
+- adaptive learning rate;
+- learning-rate recovery cooldown after a validation rollback;
+- training-step entropy schedule;
+- adaptive entropy rescue when the action policy becomes too concentrated.
+
+### Validation recovery guard
+If the fixed skill suite detects either a severe balanced-policy regression or catastrophic forgetting, the trainable model is automatically restored from Best Balanced. The experience counter is **not** rewound. The recovery event is recorded and the learning rate is reduced.
+
+For the next recovery period, validation temporarily runs every 25,000 experience steps so another collapse is caught sooner.
+
+This is intentionally different from the old `Restore Best` button: the automatic guard is a safety rail triggered only by the objective retention protocol. The manual restore button remains available for deliberate experimentation.
+
+## Existing saves
+
+v0.1.1 uses checkpoint schema 3 and accepts schema 1, 2, and 3.
+
+When loading a v0.1.0.1.x/schema-2 session:
+
+1. the current Latest model, total experience counter, optimizer, curriculum and milestone history are preserved;
+2. the old protected Best is preserved as a migration candidate;
+3. training pauses after explicit load, as before;
+4. the first v0.1.1 validation re-evaluates Latest and the legacy Best on the new fixed all-skills protocol;
+5. no old score is compared numerically against a new incompatible score;
+6. subsequent saves use schema 3.
+
+The recovery-safe Manual Save / Validation Autosave split and lower-step overwrite guard remain intact.
+
+## Recommended upgrade from v0.1.0.1.2
+
+Before replacing the deployed files, press **Save Manual** in the currently running build.
+
+After deploying v0.1.1:
+
+1. refresh the page;
+2. verify the Manual Save step count;
+3. press **Load Manual**;
+4. confirm the expected total step count and that training is paused;
+5. press **Resume**;
+6. wait for the immediate migration/rebaseline validation;
+7. inspect the new Skill Retention panel and protected archive entries;
+8. press **Save Manual** after the v0.1.1 validation if you want a schema-3 manual checkpoint immediately.
+
+Do not clear Safari website data between versions; checkpoints live in IndexedDB.
+
+## Run locally
 
 ```bash
 npm test
 npm run build
-python3 -m http.server 8080
+python3 -m http.server 8080 --directory dist
 ```
 
-Open `http://localhost:8080`. `dist/` is also a static GitHub-Pages-ready build.
+Then open `http://localhost:8080/`.
 
-## Modes
+## Benchmark
 
-- **LEARN** — trains the Latest brain with PPO using multiple headless environments. Rendering is decoupled from training.
-- **OBSERVE** — watches either **Latest** or the protected **Best** brain in a separate procedural world.
-- **PROBE** — freezes movement and lets you reposition food, a hazard, or the agent. Policy outputs update from the selected real model without taking an action.
+```bash
+npm run benchmark
+STEPS=150000 npm run benchmark
+```
 
-## Stability protection
+The benchmark uses a fixed training seed and a separate held-out seed domain. See `docs/BENCHMARK.md` and `BUILD_REPORT.md` for the release run.
 
-Automatic validation uses a deterministic seed domain named `validation:v1`, separate from both training and the manual held-out test domain. Validation runs at selected training milestones and on curriculum transitions.
+## Scope boundary
 
-The best validation result for each curriculum protocol is preserved with:
-
-- model parameters
-- optimizer state
-- curriculum state
-- validation metrics
-- source training step
-
-A worse Latest policy never overwrites that protected brain. **Restore Best** is explicit and never automatic.
-
-Each automatic validation writes an `autosave` checkpoint to IndexedDB. The UI now exposes **Manual Save** and **Validation Autosave** separately; it never silently chooses the newest one.
-
-## Curriculum stability
-
-Curriculum changes now use hysteresis:
-
-- sustained performance is required to promote
-- sustained collapse can demote the curriculum
-- a cooldown prevents immediate oscillation after a stage change
-- v0.1.0 saves receive a cooldown on migration before demotion is allowed
-
-## Model
-
-`10 observations → 24 tanh recurrent units → 7-action policy + scalar value`
-
-The recurrent state is real and feeds the next timestep. v0.1.0.1.2 deliberately preserves the compact stop-gradient recurrent PPO baseline rather than changing the learning algorithm at the same time as stabilization. See `docs/ARCHITECTURE.md`.
-
-## Data integrity
-
-Training, validation, observation, and held-out evaluation use separate deterministic seed domains. `UNSEEN TEST` never trains the policy. Neural graphics are driven by live model values; there are no random decorative activity pulses.
-
-## iPhone notes
-
-Canvas 2D is used instead of Three.js. Compute presets change training duty cycle. Start with **Balanced**; use **Eco** if Safari warms the phone during long runs. Automatic validation is intentionally infrequent and bounded.
-
-### Upgrading from v0.1.0
-
-Before replacing the old GitHub Pages build, press **Save** in the currently open v0.1.0 session if you want to preserve that in-memory run. v0.1.0.1.2 can load the existing schema-1 IndexedDB checkpoint and migrates it in memory without rewriting the old record until the next save/autosave.
-
-
-## Historical checkpoint continuation
-
-The original v0.1.0 milestone list ended at 1,000,000 steps even though training continued. v0.1.0.1.1 removes that ceiling. Historical brains are now captured on an adaptive schedule:
-
-- fixed early milestones through 1M
-- every 250k from 1M to 5M
-- every 500k from 5M to 20M
-- every 1M from 20M to 100M
-- every 5M beyond 100M
-
-When a v0.1.0 save already beyond 1M is loaded, MicroMind does **not** fabricate missed checkpoints using the current brain. It records one honest migration snapshot at the exact loaded step count, then continues from the next future milestone. Compare Brains preserves early anchors while also showing recent historical brains, Latest, and Protected Best.
-
-
-## Recovery-safe save slots
-
-The Manual Save (`latest`) and Validation Autosave (`autosave`) are shown as separate storage slots with step count, episode count, schema, and saved timestamp. **Load Manual** and **Load Autosave** are explicit actions. Any load pauses training so the restored step count can be verified before resuming.
-
-Manual saves are protected against accidental rollback overwrite: if the browser already holds a higher-step Manual Save than the currently running brain, **Save Manual refuses to overwrite it**. This is specifically intended to protect a mature saved run when a page refresh starts a fresh in-memory brain. Automatic validation continues to update only the separate autosave slot.
+v0.1.1 deliberately does **not** add a larger brain, world model, curiosity, imagined rollouts, language, or multi-agent behavior. The point of this milestone is to make the existing learner more trustworthy before adding cognitive complexity.

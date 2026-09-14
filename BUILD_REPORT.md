@@ -1,111 +1,73 @@
-# MicroMind v0.1.0.1.2 — Recovery-Safe Save Slots Hotfix
+# MicroMind v0.1.1 — Learning Stability & Skill Retention
 
-**Build marker:** `SAVEREC-01012`
+**Build marker:** `STABRET-011`
 
-**Baseline:** exact v0.1.0.1.1 `HISTCONT-01011`, itself containing v0.1.0.1 stabilization and v0.1.0 foundation
+## Baseline
 
-## Why this update exists
+Built directly from MicroMind v0.1.0.1.2 `SAVEREC-01012`. The 10→24 recurrent actor-critic, 7-action space, world physics, reward decomposition, live neural instrumentation, historical checkpoints, explicit Manual/Autosave recovery slots and GitHub Pages deployment structure are preserved.
 
-Physical iPhone testing showed genuine learning but also a non-monotonic training failure: a ~500k-step historical brain outperformed the ~600k-step Latest policy on held-out worlds. the stabilization line treats that as a learning-system observation, not something to hide.
+## Reason for milestone
+
+Physical iPhone training demonstrated non-monotonic policy behavior: strong balanced policies could later specialize into low-thrust/high-survival behavior or otherwise lose foraging competence. The old Best protection saved good weights but did not measure earlier skills consistently or constrain the optimizer enough.
 
 ## Implemented
 
-- automatic fixed-seed validation domain separate from training and manual held-out evaluation
-- protected Best brain per curriculum validation protocol
-- best snapshots include model + optimizer + curriculum state
-- Latest can regress without destroying Best
-- explicit **Restore Best**; never automatic rollback
-- **Latest / Best** selection in Observe and Probe
-- periodic validation plus validation on curriculum transitions
-- automatic IndexedDB autosave after every automatic validation
-- manual and validation-autosave slots are displayed and loaded explicitly; no newest-wins ambiguity
-- curriculum demotion as well as promotion
-- promotion/demotion hysteresis and transition cooldown
-- stale episodes from old curriculum stages cannot vote on a new stage
-- schema-1 v0.1.0 checkpoint migration
-- migrated legacy run validates its existing policy before resumed training can change curriculum
-- built-in control/metric help for mobile
-- chart markers for curriculum changes and validation events
-- increased manual Unseen Test to 32 held-out episodes
-- historical comparison uses 24 identical held-out episodes per brain
-- core neural architecture and PPO hyperparameters intentionally unchanged
+- fixed all-four-stage `validation:v2` protocol;
+- bounded per-stage skill retention scores;
+- catastrophic-forgetting detection;
+- curriculum promotion gate requiring retained prior skills;
+- separate protected Balanced / Overall / Forager / Survivor / Efficiency archives;
+- schema-3 persistence for archive/retention state;
+- schema-1 and schema-2 migration;
+- re-evaluation of legacy v0.1.0.1.x Best on the new protocol before comparison;
+- PPO clip reduction to 0.12;
+- conservative 5e-5…2e-4 adaptive learning-rate range;
+- target-KL epoch early stopping;
+- hard-KL whole-update rollback including Adam state;
+- training-step entropy schedule;
+- low-entropy rescue multiplier;
+- automatic Best-Balanced recovery after severe regression or catastrophic forgetting;
+- recovery learning-rate cooldown;
+- 25k-step follow-up validation during recovery;
+- UI metrics for LR, KL, PPO epochs and skill retention;
+- Observe/Probe access to protected specialist brains.
 
 ## Automated verification
 
-`npm test`: **26/26 PASS**
+- core tests: **28/28 PASS**
+- JavaScript syntax checks: PASS
+- clean static production build: PASS
+- checkpoint schema-2 → schema-3 migration test: PASS
+- hard-KL rejected-update exact model rollback test: PASS
+- fixed full-skill deterministic validation test: PASS
+- catastrophic-forgetting / automatic recovery test: PASS
+- recovery-safe lower-step Manual Save protection remains tested.
 
-Coverage includes:
+## Benchmark evidence
 
-- deterministic PRNG/worlds
-- seed-domain separation
-- observation/action/reward finiteness
-- GAE
-- model roundtrip
-- real parameter updates
-- curriculum promotion + demotion
-- validation repeatability
-- best-brain preservation
-- regression detection
-- explicit restore-best rollback
-- schema-2 restore
-- schema-1 migration
-- legacy long-run pre-resume validation
-- UI control presence
-- checkpoint scheduling beyond 1M
-- long-run migration without fabricated backfill
+The release smoke run begins around -9.674 held-out return and learns a strongly positive held-out policy. A 150k stress run reproduces later policy forgetting; the new retention guard detects it, restores the protected policy without rewinding experience, reduces LR, and arms more frequent validation.
 
-All JS/MJS files pass `node --check`.
+The stress result is intentionally reported rather than hidden: rollback protection is a containment mechanism, not a final solution to continual learning.
 
-Static production build succeeds.
+## Physical iPhone acceptance gate
 
-## Controlled benchmark
+After deploying:
 
-At 60,160 training steps with seed `424242`:
-
-- initial held-out return: `-9.674`
-- Latest held-out return: `-0.761`
-- Protected Best held-out return: `1.211`
-- Protected Best source step: `50,176`
-- Protected Best food: `1.344`
-- Protected Best survival: `78.1%`
-
-The benchmark intentionally encountered late-policy regression and verified that Best retained the better earlier policy. See `docs/BENCHMARK.md`.
-
-## Compatibility / migration
-
-Checkpoint schema advances from 1 to 2 internally. v0.1.0 schema-1 saves remain loadable. The IndexedDB database/store names are unchanged.
-
-**Important physical-upgrade step:** if the current v0.1.0 training run is still only in memory, press **Save** before replacing the deployed files. Deploying/reloading cannot recover an unsaved in-memory model from the old page.
+1. Load the current v0.1.0.1.2 Manual Save explicitly.
+2. Confirm the expected multi-million step count remains intact.
+3. Resume and allow the immediate v0.1.1 rebaseline validation to complete.
+4. Verify the old protected Best remains available during migration and gets re-evaluated under the new protocol.
+5. Verify Skill Retention populates all four stages.
+6. Verify protected specialist options populate.
+7. Train through at least two 250k historical milestones while watching LR/KL/retention.
+8. Confirm any automatic recovery leaves the total experience counter monotonic.
+9. Run Unseen Test and Compare Brains.
+10. Check Safari responsiveness/heat in Balanced mode.
 
 ## Known limitations
 
-- Recurrent state still uses stop-gradient sample updates rather than truncated BPTT.
-- Validation is a small fixed suite; Best means “best under this protocol,” not universally best.
-- Automatic validation is synchronous and can cause a brief training/UI pause at infrequent validation points; physical iPhone timing should be checked.
-- PPO can still regress. v0.1.0.1.2 preserves and exposes the regression rather than claiming to eliminate catastrophic forgetting.
-- Physical iPhone testing is required before this becomes the accepted baseline.
-
-
-## v0.1.0.1.1 checkpoint-history correction
-
-Physical testing also exposed that the historical milestone schedule stopped at 1,000,000 steps. Training itself did not stop; only historical policy capture did. This hotfix:
-
-- continues milestone capture indefinitely using an adaptive sparse schedule
-- prevents fake backfilling when loading an old run already beyond 1M
-- captures the exact loaded legacy brain as a migration snapshot
-- keeps early anchor brains visible while Compare Brains also shows recent milestones
-- leaves model architecture, PPO hyperparameters, rewards, curriculum logic, validation logic, physics, and checkpoint schema unchanged
-
-
-## v0.1.0.1.2 recovery correction
-
-Physical testing showed a refresh could start a new in-memory brain while the older high-step Manual Save still existed in IndexedDB. The prior single **Load** action selected the newest timestamp, which could make a newer low-step validation autosave obscure the older mature Manual Save. This hotfix:
-
-- exposes Manual Save and Validation Autosave separately
-- shows each slot's exact training steps, episodes, schema, and save time before loading
-- pauses training after any restore so the user can verify the recovered checkpoint
-- prevents a lower-step current brain from overwriting a higher-step Manual Save
-- leaves the IndexedDB database name, object store, keys (`latest`, `autosave`), checkpoint schema, model, PPO, reward system, curriculum, and physics unchanged
-- includes the extended post-1M historical checkpoint schedule from v0.1.0.1.1
-
-The hotfix cannot guarantee an old manual checkpoint exists until the deployed browser reads its IndexedDB. It is designed to inspect and recover it safely if it is still present.
+- recurrence remains stop-gradient through time rather than sequence BPTT/GRU;
+- validation/recovery preserves good behavior but does not itself consolidate skills inside the network;
+- a single 1,040-parameter policy may still face interference between objectives;
+- fixed validation adds periodic CPU work, though it is infrequent outside recovery;
+- no curiosity/world model/planning is included in this milestone.
