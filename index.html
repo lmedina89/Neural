@@ -14,7 +14,7 @@
         <div class="eyebrow">MICROMIND • LEARNING LABORATORY</div>
         <h1>Watch a tiny brain actually learn.</h1>
       </div>
-      <div class="build" id="buildTag">v0.1.3.2 • STABOBS-0132</div>
+      <div class="build" id="buildTag">v0.1.3.3 • NEURAFX-0133</div>
     </header>
 
     <section class="controls" aria-label="Main controls">
@@ -79,6 +79,7 @@
       <div class="helpGrid">
         <div><b>New Brain</b><span>Fresh random network. Save first if you want to keep the current run.</span></div>
         <div><b>Learn</b><span>Runs guarded PPO on the autonomous Learner. Earlier skills are continuously rehearsed alongside the current curriculum.</span></div>
+        <div><b>Cognitive Flow</b><span>Animates real sensory influence, recurrent memory links, policy/value pathways, decision confidence, reward and novelty. It is a read-only visualization of the actual running networks.</span></div>
         <div><b>Curiosity</b><span>A tiny learned forward model predicts the next sensory state. Unexpected-but-nonterminal transitions add a tightly capped intrinsic bonus during training only. Evaluations never include it.</span></div>
         <div><b>Observe</b><span>Stops learning and watches the selected Learner/Champion brain act at human speed.</span></div>
         <div><b>Probe</b><span>Freezes action. Move food/hazard/agent and inspect real policy changes.</span></div>
@@ -120,13 +121,14 @@
         <div class="panelHead">
           <strong>LIVE BRAIN</strong>
           <div class="brainHeadControls"><span id="viewBrainBadge">LEARNER</span><select id="brainView" aria-label="Brain visualization mode">
+            <option value="FLOW" selected>Cognitive Flow</option>
             <option value="ACTIVE">Active</option>
             <option value="WEIGHTS">Weights</option>
             <option value="STRONGEST">Strongest</option>
           </select></div>
         </div>
         <canvas id="brainCanvas" aria-label="Neural network visualization"></canvas>
-        <div class="inspect" id="inspectText">Tap a neuron to inspect its real runtime value.</div>
+        <div class="inspect" id="inspectText">Tap a real sensor, recurrent unit, policy output, or value node to inspect its runtime state.</div>
       </article>
     </section>
 
@@ -256,7 +258,7 @@
       <div class="collapsibleBody"><div id="resultsText" class="resultsText">No evaluation run yet.</div></div>
     </details>
 
-    <footer>MicroMind v0.1.3.2 adds an observational PPO Stability Observatory and compact collapsible research panels. Learning math, curiosity reward, curriculum, and protected Champion behavior remain unchanged.</footer>
+    <footer>MicroMind v0.1.3.3 adds Neural Flow & Cognitive FX: real activation pulses, recurrent-memory flow, decision beams, a data-driven cognitive halo, world salience cues, and prediction ghosts. Learning math, curiosity reward, curriculum, save schema, and protected Champion behavior remain unchanged.</footer>
   </main>
   <script type="module" src="./src/app/main.js"></script>
 </body>

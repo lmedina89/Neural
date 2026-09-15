@@ -33,3 +33,10 @@ Ordinary validation can emit a compact regression event when a balanced score fa
 ## Persistence
 
 Schema 9 stores the prior schema-8 curiosity/A/B state plus active-lineage stability history, regression events, and the next capture point. Frozen learner branches keep their own telemetry. Schemas 1–9 load; schema 8 migrates with empty stability history and otherwise preserves its exact state.
+
+
+## v0.1.3.3 Neural Flow & Cognitive FX
+
+The visualization layer is deliberately read-only. `NeuralRenderer` receives the policy model plus its real forward-pass snapshot and derives edge activity from actual observations, hidden activations, recurrent weights, policy/value weights, action probabilities, and value estimates. `WorldRenderer` receives normalized sensor-influence values and the current dominant policy action to draw world-linked salience and decision light cues. `CuriosityRenderer` visualizes the learned forward model's real predicted-versus-actual next-sensory state and prediction error.
+
+The new **Cognitive Flow** mode adds moving pulses, recurrent-memory arcs, a data-driven decision beam, and a multi-ring cognitive halo. The halo is not a second model: its confidence, novelty, and reward modulation are derived from existing runtime telemetry. No visualization code updates policy weights, optimizer state, curiosity parameters, curriculum state, Champions, or checkpoints.

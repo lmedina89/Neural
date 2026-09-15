@@ -1,5 +1,5 @@
-export const VERSION = '0.1.3.2';
-export const BUILD_MARKER = 'STABOBS-0132';
+export const VERSION = '0.1.3.3';
+export const BUILD_MARKER = 'NEURAFX-0133';
 
 export const CONFIG = Object.freeze({
   world: {

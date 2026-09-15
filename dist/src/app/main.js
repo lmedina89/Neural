@@ -343,6 +343,38 @@ function updateProbe() {
   lastSnapshot = model.forward(viewObs, viewHidden);
   updateDecision();
 }
+
+function cognitiveFx(model, snapshot, world) {
+  if (!model || !snapshot) return null;
+  const obs = snapshot.obs || [];
+  const hiddenN = snapshot.h?.length || 0;
+  const influence = Array(obs.length).fill(0);
+  if (hiddenN && model.params?.wx) {
+    for (let j = 0; j < obs.length; j++) {
+      let sum = 0;
+      for (let i = 0; i < hiddenN; i++) sum += Math.abs((Number(obs[j]) || 0) * model.params.wx[i * obs.length + j]);
+      influence[j] = sum / hiddenN;
+    }
+    const max = Math.max(...influence, 1e-9);
+    for (let j = 0; j < influence.length; j++) influence[j] = Math.min(1, influence[j] / max);
+  }
+  const probs = snapshot.probs || [];
+  const ranked = Array.from(probs.keys()).sort((a, b) => probs[b] - probs[a]);
+  const first = ranked[0] ?? 0, second = ranked[1] ?? first;
+  const dominantProb = Number(probs[first]) || 0;
+  const secondProb = Number(probs[second]) || 0;
+  const rp = world?.lastRewardParts || {};
+  const reward = Object.values(rp).reduce((a, v) => a + (Number(v) || 0), 0);
+  return {
+    inputInfluence: influence,
+    dominantAction: first,
+    dominantProb,
+    decisionConfidence: Math.max(0, dominantProb - secondProb),
+    curiosityNovelty: mode === 'LEARN' ? Number(session.lastCuriosity?.novelty || 0) : 0,
+    curiosityError: mode === 'LEARN' ? Number(session.lastCuriosity?.error || 0) : 0,
+    reward,
+  };
+}
 function frame(now) {
   const dt = Math.min(100, now - lastFrame);
   lastFrame = now;
@@ -365,12 +397,13 @@ function frame(now) {
   if (now - lastVisualRender >= 1000 / Math.max(1, renderHz)) {
     lastVisualRender = now;
     const model = selectedViewModel();
-    worldRenderer.draw(viewWorld, mode + (paused ? ' • PAUSED' : ''), mode === 'LEARN' ? session.curiosityTrail : []);
+    const fx = cognitiveFx(model, lastSnapshot, viewWorld);
+    worldRenderer.draw(viewWorld, mode + (paused ? ' • PAUSED' : ''), mode === 'LEARN' ? session.curiosityTrail : [], fx, now);
     neuralRenderer.mode = el.brainView.value;
-    neuralRenderer.draw(model, lastSnapshot);
+    neuralRenderer.draw(model, lastSnapshot, fx, now);
     if (el.curiosityCanvas.getBoundingClientRect().width > 1 && now - lastCuriosityRender >= 1000 / Math.max(1, CONFIG.runtime.curiosityRenderHz)) {
       lastCuriosityRender = now;
-      curiosityRenderer.draw(session.curiosity, session.lastCuriosity);
+      curiosityRenderer.draw(session.curiosity, session.lastCuriosity, now);
     }
     updateDecision();
   }
