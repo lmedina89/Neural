@@ -27,6 +27,7 @@ while (session.totalSteps < target) {
       epochs: metric.epochsRun,
       rejected: metric.updateRejected,
       rehearsal: metric.rehearsalMix.fractions.map(x => Number(x.toFixed(2))),
+      curiosity: { error: metric.curiosity.meanPredictionError.toFixed(4), novelty: metric.curiosity.meanNovelty.toFixed(3), bonus: metric.curiosity.meanIntrinsicReward.toFixed(5), loss: metric.curiosity.predictorLoss.toFixed(5) },
     });
     nextPrint += 10000;
   }
@@ -62,6 +63,7 @@ const report = {
   rehearsalObserved: session.recentRehearsalMix(),
   lineage: session.learnerLineage,
   archive: session.archiveSummary(),
+  curiosity: { params: session.curiosity.paramCount(), stats: session.curiosity.lastStats },
   validations: session.validationHistory.map(v => ({
     steps: v.steps,
     learner: v.validation.score,

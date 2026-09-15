@@ -1,43 +1,54 @@
-# Architecture — v0.1.2.1
+# Architecture — v0.1.3
 
-The learning model is unchanged from v0.1.2:
+## Policy learner
+Unchanged from v0.1.2.1:
 
 `10 observations → 24 recurrent units → 7-action policy + value head`
 
-The active learning loop remains:
+This network has **1,040 learned parameters** and is still trained by the same recurrent PPO implementation.
 
-`procedural experience → autonomous Learner → validation laboratory → frozen Champions`
+## Curiosity predictor
+New in v0.1.3:
 
-Behavioral regression is observational. The Learner is not automatically restored from a Champion. Numerical PPO safety can still reject a mathematically destructive update.
+`10 observations + 7-way one-hot action → 16 tanh units → 9 predicted dynamic next-observation values`
 
-## Hall of Fame
-A Hall entry is an immutable policy snapshot copied from a validated Champion. It stores model weights, source step/lineage, validation metadata, version/build identity, and (when available) optimizer state for deliberate research branching.
+The forward model has **441 learned parameters**. It is deliberately auxiliary: it does not choose actions directly and it does not alter evaluation scores.
 
-Hall data is persisted twice:
-1. a dedicated IndexedDB `hall-of-fame` slot, independent of ordinary Manual/Autosave replacement;
-2. schema-6 checkpoint backup.
+For a sampled transition:
 
-Exact duplicate policies are fingerprint-deduplicated. There is no automatic Hall replacement.
+1. the policy chooses an action;
+2. the real world advances;
+3. before the predictor learns that transition, prediction error is measured;
+4. error is normalized against an EMA of recent prediction error;
+5. positive novelty yields a tightly bounded intrinsic reward;
+6. PPO receives `external reward + intrinsic reward` for that training transition;
+7. the predictor then trains on the real `(state, action, next state)` sample.
 
-## Learner branches
-Only one learner lineage trains at a time.
+Curiosity is sampled every fourth environment transition. This preserves a genuine one-step prediction objective while keeping mobile overhead small.
 
-- Forking freezes the current Learner state, then starts a new lineage from a selected Champion/Hall policy.
-- Switching branches freezes the lineage being left and restores the selected frozen lineage.
-- `totalSteps` is global experiment age and never rewinds during a fork/switch.
-- `learnerExperienceSteps` is branch-local experience and resets on a new fork.
-- Champions and Hall entries are shared research artifacts across branches.
+## Reward containment
+External world reward is unchanged and remains separately recorded in `World.info().totalReward`.
 
-## Continual rehearsal
-The v0.1.2 rehearsal distributions are unchanged. At Scarcity the target remains approximately 10% Motor, 15% Foraging, 20% Obstacle Avoidance, 55% Scarcity.
+Curiosity:
+- never changes the programmed external reward components;
+- is zero on terminal transitions;
+- is capped per sampled step;
+- is capped to 0.25 total bonus per episode;
+- is disabled in validation/comparison/final-holdout evaluation.
 
-## Performance architecture
-Training, visualization, UI, validation, and storage are timed separately. Training uses a capture-free model path so visualization-only snapshots are not allocated inside headless training. The PPO hot loop reuses derivative buffers and computes Adam bias corrections once per update. Canvas/DOM refresh rates are decoupled from training throughput.
+This makes curiosity an exploration pressure, not a replacement objective.
 
-Adaptive compute uses the same rollout size as Balanced and adjusts only browser idle delay using observed rendering responsiveness.
+## Continual learning / Champions
+Unchanged from v0.1.2.1:
+
+`procedural experience → autonomous Learner → validation → frozen Champions`
+
+Behavioral regression remains observational. No automatic Champion rollback is reintroduced.
+
+Curiosity state is saved with schema-7 Learners and new v0.1.3 Champion/Hall snapshots so a deliberate future branch can restore the predictor knowledge associated with that policy. Older Champions without curiosity state remain valid policy snapshots and simply start a fresh predictor if used as a branch parent.
 
 ## Data separation
-- training: `train:*`
-- validation / Champion selection: `validation:v3`
-- historical comparison: `heldout:compare:v2`
-- final diagnostic: `heldout:final:v2`
+- training: `train:*` — curiosity ON
+- validation / Champion selection: `validation:v3` — curiosity OFF
+- historical comparison: `heldout:compare:v2` — curiosity OFF
+- final diagnostic: `heldout:final:v2` — curiosity OFF

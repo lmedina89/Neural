@@ -16,7 +16,7 @@ export class WorldRenderer {
     this.ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
     return { w: rect.width, h: rect.height };
   }
-  draw(world, mode = 'OBSERVE') {
+  draw(world, mode = 'OBSERVE', noveltyTrail = []) {
     this.world = world;
     const { w, h } = this.resize(), c = this.ctx;
     c.clearRect(0, 0, w, h);
@@ -27,6 +27,20 @@ export class WorldRenderer {
       c.beginPath(); c.moveTo(0,(h*i)/10); c.lineTo(w,(h*i)/10); c.stroke();
     }
     const sx = x => x*w, sy = y => y*h;
+    // Real curiosity trail from the currently training environment only. These
+    // marks are prediction-surprise samples, not decorative random particles.
+    if (Array.isArray(noveltyTrail) && noveltyTrail.length) {
+      for (let i = 0; i < noveltyTrail.length; i++) {
+        const q = noveltyTrail[i];
+        const age = noveltyTrail.length > 1 ? i / (noveltyTrail.length - 1) : 1;
+        const n = Math.max(0, Math.min(1, Number(q.novelty) || 0));
+        if (n <= 0) continue;
+        c.beginPath();
+        c.arc(sx(q.x), sy(q.y), (4 + 16 * n) * (0.55 + 0.45 * age), 0, Math.PI * 2);
+        c.fillStyle = `rgba(246,187,91,${(0.015 + 0.11 * n) * age})`;
+        c.fill();
+      }
+    }
     for (const wall of world.walls) {
       c.fillStyle='rgba(135,155,170,.36)'; c.fillRect(sx(wall.x),sy(wall.y),wall.w*w,wall.h*h);
       c.strokeStyle='rgba(190,220,230,.32)'; c.strokeRect(sx(wall.x),sy(wall.y),wall.w*w,wall.h*h);

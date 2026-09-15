@@ -9,6 +9,7 @@ import { loadCheckpointRecord, loadHallOfFameRecord, saveCheckpoint, saveHallOfF
 import { WorldRenderer } from '../visualization/worldRenderer.js';
 import { NeuralRenderer } from '../visualization/neuralRenderer.js';
 import { ChartRenderer } from '../visualization/chartRenderer.js';
+import { CuriosityRenderer } from '../visualization/curiosityRenderer.js';
 
 const $ = id => document.getElementById(id);
 const el = {
@@ -27,19 +28,21 @@ const el = {
   pinChampion: $('pinChampionBtn'), branchSelect: $('branchSelect'), switchBranch: $('switchBranchBtn'), hallOptions: $('hallBrainOptions'),
   experienceAge: $('experienceAgeVal'), researchLineage: $('researchLineageVal'), policyOrigin: $('policyOriginVal'), activeChampion: $('activeChampionVal'), hall: $('hallVal'), branches: $('branchesVal'), hallList: $('hallList'),
   simSpeed: $('simSpeedVal'), ppoMs: $('ppoMsVal'), fps: $('fpsVal'), uiMs: $('uiMsVal'), validationMs: $('validationMsVal'), storageMs: $('storageMsVal'),
+  curiosityCanvas: $('curiosityCanvas'), curiosityError: $('curiosityErrorVal'), curiosityNovelty: $('curiosityNoveltyVal'), curiosityBonus: $('curiosityBonusVal'),
+  curiosityBudget: $('curiosityBudgetVal'), curiosityLoss: $('curiosityLossVal'), curiosityParams: $('curiosityParamsVal'), curiosityInspect: $('curiosityInspect'),
 };
 $('buildTag').textContent = `v${VERSION} • ${BUILD_MARKER}`;
 
 const budgets = { eco: { rollout: 8, delay: 30 }, balanced: { rollout: 18, delay: 10 }, adaptive: { rollout: 18, delay: 8 }, max: { rollout: 36, delay: 0 } };
 const archiveLabels = { balanced: 'CHAMPION BALANCED', overall: 'CHAMPION OVERALL', forager: 'CHAMPION FORAGER', survivor: 'CHAMPION SURVIVOR', efficiency: 'CHAMPION EFFICIENCY' };
 let mode = 'LEARN', paused = false, trainBusy = false, observeAccum = 0, lastFrame = performance.now(), viewSeedIndex = 0;
-let lastVisualRender = 0, lastUiPaint = 0, lastUiDurationMs = 0, lastStorageDurationMs = 0, browserFps = 60, rafFrames = 0, rafWindowStart = performance.now(), adaptiveDelay = 8, controlSignature = '';
+let lastVisualRender = 0, lastCuriosityRender = 0, lastUiPaint = 0, lastUiDurationMs = 0, lastStorageDurationMs = 0, browserFps = 60, rafFrames = 0, rafWindowStart = performance.now(), adaptiveDelay = 8, controlSignature = '';
 let session = new TrainingSession({ seed: 1337, envCount: CONFIG.runtime.trainEnvs });
 let archiveModelCache = null, archiveModelCacheKey = null;
 let viewWorld = createViewWorld();
 let viewObs = viewWorld.observe(), viewHidden = session.model.zeroHidden(), lastSnapshot = session.model.forward(viewObs, viewHidden);
 const viewRng = new PRNG(0xabc123);
-const worldRenderer = new WorldRenderer(el.world), neuralRenderer = new NeuralRenderer(el.brain), chartRenderer = new ChartRenderer(el.chart);
+const worldRenderer = new WorldRenderer(el.world), neuralRenderer = new NeuralRenderer(el.brain), chartRenderer = new ChartRenderer(el.chart), curiosityRenderer = new CuriosityRenderer(el.curiosityCanvas);
 const actionUi = ACTIONS.map(action => {
   const row = document.createElement('div');
   row.className = 'actionRow';
@@ -97,7 +100,7 @@ async function hydratePersistentHall({ pinMigrationBaseline = false } = {}) {
     const record = await loadHallOfFameRecord();
     if (record?.snapshot) session.mergeHallOfFame(record.snapshot);
     if (pinMigrationBaseline && session.hallOfFame.length === 0 && session.getArchiveBrain('balanced')?.model) {
-      session.pinChampion('balanced', { reason: 'v0.1.2-migration-baseline' });
+      session.pinChampion('balanced', { reason: 'pre-curiosity-migration-baseline' });
     }
     if (session.hallOfFame.length) await persistHallOfFame();
   } catch (err) {
@@ -111,7 +114,7 @@ async function restoreCheckpointRecord(record, label) {
   paused = true;
   el.pause.textContent = 'Resume';
   session.restore(cp);
-  await hydratePersistentHall({ pinMigrationBaseline: cp.schema === 5 });
+  await hydratePersistentHall({ pinMigrationBaseline: cp.schema <= 6 });
   archiveModelCache = null;
   archiveModelCacheKey = null;
   viewSeedIndex = 0;
@@ -119,8 +122,8 @@ async function restoreCheckpointRecord(record, label) {
   resetViewState();
   updateUI();
   await refreshSaveSlots();
-  const migration = cp.schema < 6
-    ? ' Legacy checkpoint loaded safely. Existing Champions are preserved; v0.1.2 Balanced Champion was pinned into the Hall of Fame when no prior Hall record existed.'
+  const migration = cp.schema < 7
+    ? ' Legacy policy/Champion state loaded safely. The v0.1.3 curiosity predictor starts fresh because older checkpoints did not contain one; when the Hall was empty, the existing Balanced Champion was pinned as a pre-curiosity reference.'
     : '';
   setStatus(`${label} restored at ${session.totalSteps.toLocaleString()} steps. Training is PAUSED so you can verify it before pressing Resume/Learn.${migration}`);
   return true;
@@ -139,7 +142,7 @@ async function saveManualSafely() {
     await persistHallOfFame();
     lastStorageDurationMs = performance.now() - started;
     await refreshSaveSlots();
-    setStatus(`Manual checkpoint saved at ${session.totalSteps.toLocaleString()} steps. Learner branches, rehearsal state, Champions, and Hall of Fame backup included.`);
+    setStatus(`Manual checkpoint saved at ${session.totalSteps.toLocaleString()} steps. Learner, curiosity predictor, branches, rehearsal state, Champions, and Hall of Fame backup included.`);
   } catch (e) { setStatus(`Save failed: ${e.message}`); }
 }
 
@@ -197,7 +200,7 @@ function setMode(next) {
   if (next !== 'LEARN') resetViewState();
   el.viewBrainBadge.textContent = selectedSourceLabel();
   setStatus(next === 'LEARN'
-    ? 'Autonomous Learner active. PPO trains continuously across current challenges plus rehearsal of earlier skills; Champions are frozen observers.'
+    ? 'Autonomous Learner active. PPO trains across current challenges plus rehearsal, with a small bounded intrinsic bonus from the learned curiosity predictor; Champions remain frozen observers.'
     : next === 'OBSERVE'
       ? `Watching the ${selectedSourceLabel().toLowerCase()} policy in a separate procedural world.`
       : 'World frozen. Tap to manipulate stimuli and inspect the selected policy response.');
@@ -326,9 +329,13 @@ function frame(now) {
   if (now - lastVisualRender >= 1000 / Math.max(1, renderHz)) {
     lastVisualRender = now;
     const model = selectedViewModel();
-    worldRenderer.draw(viewWorld, mode + (paused ? ' • PAUSED' : ''));
+    worldRenderer.draw(viewWorld, mode + (paused ? ' • PAUSED' : ''), mode === 'LEARN' ? session.curiosityTrail : []);
     neuralRenderer.mode = el.brainView.value;
     neuralRenderer.draw(model, lastSnapshot);
+    if (now - lastCuriosityRender >= 1000 / Math.max(1, CONFIG.runtime.curiosityRenderHz)) {
+      lastCuriosityRender = now;
+      curiosityRenderer.draw(session.curiosity, session.lastCuriosity);
+    }
     updateDecision();
   }
   requestAnimationFrame(frame);
@@ -343,7 +350,8 @@ function updateDecision() {
   }
   el.value.textContent = `value ${s.value.toFixed(3)}`;
   const rp = viewWorld.lastRewardParts || {};
-  el.rewardParts.textContent = `reward  food ${(rp.food || 0).toFixed(3)}  approach ${(rp.approach || 0).toFixed(3)}  energy ${(rp.energy || 0).toFixed(3)}  wall ${(rp.wall || 0).toFixed(3)}  hazard ${(rp.hazard || 0).toFixed(3)}  death ${(rp.death || 0).toFixed(3)}`;
+  const curiosityBonus = mode === 'LEARN' ? Number(session.lastCuriosity?.bonus || 0) : 0;
+  el.rewardParts.textContent = `external  food ${(rp.food || 0).toFixed(3)}  approach ${(rp.approach || 0).toFixed(3)}  energy ${(rp.energy || 0).toFixed(3)}  wall ${(rp.wall || 0).toFixed(3)}  hazard ${(rp.hazard || 0).toFixed(3)}  death ${(rp.death || 0).toFixed(3)}  | curiosity +${curiosityBonus.toFixed(4)}${mode === 'LEARN' ? '' : ' (OFF in evaluation/observation)'}`;
   el.energy.value = viewWorld.agent.energy;
   el.energyText.textContent = `${Math.round(viewWorld.agent.energy * 100)}%`;
   el.worldMeta.textContent = `seed ${viewWorld.seed}`;
@@ -372,7 +380,7 @@ function updateUI() {
   el.lr.textContent = Number.isFinite(m?.learningRate) ? m.learningRate.toExponential(2) : session.trainer.learningRate.toExponential(2);
   el.kl.textContent = Number.isFinite(m?.maxEpochKL) ? m.maxEpochKL.toFixed(4) : '—';
   el.epochs.textContent = Number.isFinite(m?.epochsRun) ? `${m.epochsRun}${m.earlyStopped ? ' stop' : ''}` : '—';
-  el.paramCount.textContent = `${session.model.paramCount().toLocaleString()} params`;
+  el.paramCount.textContent = `policy ${session.model.paramCount().toLocaleString()} + curiosity ${session.curiosity.paramCount().toLocaleString()} params`;
   el.curriculum.textContent = session.curriculum.current().name;
   const lv = session.validationHistory.at(-1);
   el.latestValidation.textContent = lv ? `${(lv.validation.score * 100).toFixed(1)}% @ ${lv.steps.toLocaleString()}${lv.balancedConfirmed ? ' CONFIRMED' : lv.balancedEvidence ? ' WATCH' : ''}` : '—';
@@ -394,6 +402,20 @@ function updateUI() {
   el.fps.textContent = `${browserFps.toFixed(0)}`;
   el.validationMs.textContent = Number.isFinite(profile.validationMs) && profile.validationMs > 0 ? `${profile.validationMs.toFixed(0)} ms` : '—';
   el.storageMs.textContent = lastStorageDurationMs > 0 ? `${lastStorageDurationMs.toFixed(0)} ms` : '—';
+
+  const curiosityMetric = m?.curiosity || {};
+  const curiosityLive = session.lastCuriosity;
+  el.curiosityError.textContent = Number.isFinite(curiosityLive?.error) ? curiosityLive.error.toFixed(4) : Number.isFinite(curiosityMetric.meanPredictionError) ? curiosityMetric.meanPredictionError.toFixed(4) : '—';
+  el.curiosityNovelty.textContent = Number.isFinite(curiosityLive?.novelty) ? `${(curiosityLive.novelty * 100).toFixed(0)}%` : Number.isFinite(curiosityMetric.meanNovelty) ? `${(curiosityMetric.meanNovelty * 100).toFixed(0)}%` : '—';
+  el.curiosityBonus.textContent = Number.isFinite(curiosityLive?.bonus) ? `+${curiosityLive.bonus.toFixed(5)}` : '—';
+  el.curiosityBudget.textContent = Number.isFinite(curiosityLive?.budgetRemaining) ? `${curiosityLive.budgetRemaining.toFixed(3)} / ${CONFIG.curiosity.maxEpisodeBonus.toFixed(2)}` : `max ${CONFIG.curiosity.maxEpisodeBonus.toFixed(2)}`;
+  el.curiosityLoss.textContent = Number.isFinite(curiosityMetric.predictorLoss) ? curiosityMetric.predictorLoss.toFixed(5) : '—';
+  el.curiosityParams.textContent = session.curiosity.paramCount().toLocaleString();
+  if (curiosityLive?.mostSurprisingIndex != null) {
+    const names = ['food x','food y','food dist','danger L','danger F','danger R','speed','turn rate','energy'];
+    const name = names[curiosityLive.mostSurprisingIndex] || `sensor ${curiosityLive.mostSurprisingIndex}`;
+    el.curiosityInspect.textContent = `Most surprising now: ${name} • |prediction error| ${Number(curiosityLive.mostSurprisingError || 0).toFixed(4)} • intrinsic reward is capped and training-only.`;
+  }
 
   const hall = session.hallOfFameSummary();
   const branches = session.frozenLearnerSummary();
@@ -550,7 +572,7 @@ This measurement is not committed to validation history or archives.`;
   }
   const compatibleBestValidation = best?.validation?.protocol?.includes('retention-v3-ci') ? best.validation : null;
   const diagnostic = generalizationDiagnostic(latestCalibration, compatibleBestValidation, r, br);
-  text += `\n\n${diagnostic.text}\nFINAL HOLDOUT IS DIAGNOSTIC ONLY — no weights, optimizer, Champion archive, curriculum, validation history, or promotion state were changed. Repeatedly consulting this set can still bias human decisions, so use it sparingly.`;
+  text += `\n\n${diagnostic.text}\nFINAL HOLDOUT IS DIAGNOSTIC ONLY — curiosity reward is OFF; no weights, optimizer, Champion archive, curriculum, validation history, or promotion state were changed. Repeatedly consulting this set can still bias human decisions, so use it sparingly.`;
   el.results.textContent = text;
   setStatus(diagnostic.conflict
     ? 'Final holdout found a validation/generalization conflict. No automatic action taken.'
@@ -678,6 +700,7 @@ el.switchBranch.addEventListener('click', () => {
 el.test.addEventListener('click', runUnseen);
 el.compare.addEventListener('click', compareBrains);
 el.brain.addEventListener('pointerdown', e => { const text = neuralRenderer.inspectAt(e.clientX, e.clientY); if (text) el.inspect.textContent = text; });
+el.curiosityCanvas.addEventListener('pointerdown', e => { const text = curiosityRenderer.inspectAt(e.clientX, e.clientY); if (text) el.curiosityInspect.textContent = text; });
 el.world.addEventListener('pointerdown', e => {
   if (mode !== 'PROBE') return;
   const r = el.world.getBoundingClientRect();

@@ -1,31 +1,55 @@
-# MicroMind v0.1.2.1 — Champion Preservation & Training Efficiency
+# MicroMind v0.1.3 — Intrinsic Curiosity Foundation
 
-MicroMind is a browser-based miniature AI research lab. A real **1,040-parameter recurrent actor-critic** learns with PPO in deterministic procedural worlds while its activations, decisions, memory, rewards, continual rehearsal, validation, and generalization are inspectable.
+MicroMind is a browser-based miniature AI research lab. A real **1,040-parameter recurrent actor-critic** learns with PPO in deterministic procedural worlds while its activations, decisions, memory, rewards, rehearsal, Champions, and generalization are inspectable.
 
-**Build:** `CHAMPEFF-0121`
+v0.1.3 adds a separate **441-parameter learned forward-prediction model** that creates a small, bounded intrinsic curiosity signal during training.
 
-## What changed in v0.1.2.1
-This is an infrastructure/performance milestone. It intentionally does **not** change the neural architecture, observations, action space, reward coefficients, PPO learning hyperparameters, curriculum definitions, rehearsal targets, validation protocols, physics, or world-generation rules from v0.1.2.
+**Build:** `CURIOUS-013`
 
-- **Permanent Hall of Fame:** pin a validated Champion into an immutable archive. Hall entries have their own IndexedDB record and are also backed up inside schema-6 checkpoints.
-- **Safe learner branching:** `Fork New Learner` freezes the current learner and starts a new lineage from a Champion or Hall entry. Only one lineage trains at a time.
-- **Switchable frozen branches:** return to an earlier learner lineage without erasing the branch you are leaving. Global experiment age remains monotonic.
-- **Explicit lineage/policy origin:** Research Status separates experiment age, active lineage, parent policy, Champions, Hall entries, and frozen branches.
-- **Training profiler:** simulation throughput, PPO time, browser FPS, UI time, validation time, and storage time are visible.
-- **Lower-overhead training:** non-visual training paths no longer build visualization snapshots, PPO hot loops reuse buffers, Canvas/DOM work is throttled, and static control DOM is reused.
-- **Adaptive compute mode:** changes browser idle duty cycle only; Balanced PPO rollout size/math is preserved.
+## What changed in v0.1.3
+The accepted v0.1.2.1 policy learner remains the control:
 
-When a **schema-5 v0.1.2** save is loaded and no Hall exists yet, the current Balanced Champion is automatically pinned as the migration baseline. For the physically tested run this is intended to preserve the ~4.800M Champion as `HOF-001`.
+- policy architecture remains **1,040 parameters**;
+- PPO implementation and hyperparameters are unchanged;
+- observations/actions are unchanged;
+- external reward coefficients are unchanged;
+- physics/world generation are unchanged;
+- curriculum and rehearsal targets are unchanged;
+- Champion selection and every evaluation protocol are unchanged.
 
-## Controls
-- **Learn:** train the active autonomous Learner.
-- **Observe / Probe:** inspect Learner, Champions, or Hall-of-Fame brains.
-- **Pin Champion:** permanently preserve the selected validated Champion.
-- **Fork New Learner:** manually start a new lineage from a Champion/Hall brain while freezing the current lineage.
-- **Switch Branch:** freeze the current learner and resume another stored learner branch.
-- **Unseen Test:** final all-skills diagnostic only; it does not train or promote.
-- **Compare Brains:** historical/Hall comparison on a separate comparison holdout.
-- **Compute:** Eco / Balanced / Adaptive / Max. Adaptive changes duty-cycle delay based on browser responsiveness; it does not alter PPO hyperparameters.
+New capability:
+
+`current observation + chosen action → curiosity predictor → predicted next observation`
+
+The predictor learns the nine dynamic sensory values (the policy's tenth observation is a constant bias feature). Prediction error becomes **novelty**. Novel nonterminal transitions can add a tiny intrinsic bonus to PPO's training reward.
+
+Safety/containment:
+
+- curiosity is sampled every fourth transition to protect mobile throughput;
+- intrinsic reward is positive-only and tightly capped per step;
+- each episode has an absolute curiosity budget of **0.25 reward**;
+- terminal/death transitions receive **zero intrinsic bonus** even though the predictor still learns them;
+- curriculum promotion, training charts, validation, Compare Brains, and Unseen Test continue to use external task performance;
+- **all evaluations run with curiosity reward OFF**.
+
+## Curiosity visualization
+The new Curiosity / Prediction screen is real instrumentation:
+
+- live prediction error;
+- normalized novelty;
+- actual intrinsic reward;
+- remaining episode curiosity budget;
+- predictor training loss;
+- predictor parameter count;
+- a live predictor graph showing real state/action inputs, hidden activity, predicted sensory outputs, actual next sensory values, and error rings;
+- a subtle world novelty trail driven by real prediction surprise from the current training environment.
+
+As familiar transitions are learned, prediction error should generally fall. Unusual transitions can temporarily become more novel again.
+
+## Save migration
+v0.1.3 uses **checkpoint schema 7** and loads schemas 1–7.
+
+Loading a v0.1.2.1/schema-6 checkpoint preserves the policy, optimizer, Champions, lineages, Hall, rehearsal state, and experiment age. Because older versions had no curiosity model, the predictor begins fresh after migration. If the persistent Hall is empty, the existing Balanced Champion is pinned as a **pre-curiosity reference**.
 
 ## Run
 ```bash

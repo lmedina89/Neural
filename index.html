@@ -77,6 +77,7 @@
       <div class="helpGrid">
         <div><b>New Brain</b><span>Fresh random network. Save first if you want to keep the current run.</span></div>
         <div><b>Learn</b><span>Runs guarded PPO on the autonomous Learner. Earlier skills are continuously rehearsed alongside the current curriculum.</span></div>
+        <div><b>Curiosity</b><span>A tiny learned forward model predicts the next sensory state. Unexpected-but-nonterminal transitions add a tightly capped intrinsic bonus during training only. Evaluations never include it.</span></div>
         <div><b>Observe</b><span>Stops learning and watches the selected Learner/Champion brain act at human speed.</span></div>
         <div><b>Probe</b><span>Freezes action. Move food/hazard/agent and inspect real policy changes.</span></div>
         <div><b>Compute</b><span>Eco reduces heat; Balanced is default; Adaptive changes only idle delay based on browser responsiveness; Max favors throughput. Learning math is unchanged.</span></div>
@@ -172,6 +173,20 @@
     </section>
 
 
+    <section class="panel curiosityPanel" aria-label="Curiosity and prediction model">
+      <div class="panelHead"><strong>CURIOSITY / PREDICTION</strong><span>learned forward model • evaluation curiosity OFF</span></div>
+      <div class="curiosityGrid">
+        <div><span>prediction error</span><b id="curiosityErrorVal">—</b></div>
+        <div><span>novelty</span><b id="curiosityNoveltyVal">—</b></div>
+        <div><span>intrinsic bonus</span><b id="curiosityBonusVal">—</b></div>
+        <div><span>episode budget</span><b id="curiosityBudgetVal">—</b></div>
+        <div><span>predictor loss</span><b id="curiosityLossVal">—</b></div>
+        <div><span>predictor size</span><b id="curiosityParamsVal">—</b></div>
+      </div>
+      <canvas id="curiosityCanvas" aria-label="Curiosity predictor visualization"></canvas>
+      <div class="curiosityInspect" id="curiosityInspect">Orange rings mark real prediction error. Tap an output node to inspect predicted versus actual sensory values.</div>
+    </section>
+
     <section class="panel skillPanel">
       <div class="panelHead"><strong>SKILL RETENTION</strong><span>validation:v3 • observational only • 95% ranges</span></div>
       <div id="skillRetention" class="skillRetention">Waiting for autonomous continual-learning validation…</div>
@@ -182,7 +197,7 @@
       <div id="resultsText" class="resultsText">No evaluation run yet.</div>
     </section>
 
-    <footer>MicroMind v0.1.2.1 preserves historic Champions and learner branches while optimizing the same autonomous continual-learning system. Learning math and evaluation protocols remain unchanged.</footer>
+    <footer>MicroMind v0.1.3 adds a bounded learned curiosity signal to the accepted continual-learning foundation. The 1,040-parameter policy/PPO system and all evaluation protocols remain intact; curiosity is training-only and disabled during evaluation.</footer>
   </main>
   <script type="module" src="./src/app/main.js"></script>
 </body>

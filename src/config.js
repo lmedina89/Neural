@@ -1,5 +1,5 @@
-export const VERSION = '0.1.2.1';
-export const BUILD_MARKER = 'CHAMPEFF-0121';
+export const VERSION = '0.1.3';
+export const BUILD_MARKER = 'CURIOUS-013';
 
 export const CONFIG = Object.freeze({
   world: {
@@ -41,6 +41,29 @@ export const CONFIG = Object.freeze({
     obsSize: 10,
     hiddenSize: 24,
     actionSize: 7,
+  },
+  curiosity: {
+    // Tiny forward-prediction model. The tenth policy observation is a constant
+    // bias feature, so curiosity predicts the nine dynamic sensory features.
+    hiddenSize: 16,
+    predictFeatures: 9,
+    learningRate: 0.001,
+    adamBeta1: 0.9,
+    adamBeta2: 0.999,
+    adamEps: 1e-8,
+    minibatchSize: 512,
+    sampleStride: 4,
+    rewardScale: 0.0048,
+    maxStepBonus: 0.006,
+    maxEpisodeBonus: 0.25,
+    errorEmaBeta: 0.995,
+    initialErrorMean: 0.18,
+    initialErrorVariance: 0.035,
+    minErrorScale: 0.01,
+    minErrorVariance: 1e-5,
+    normalizationWarmupSamples: 512,
+    noveltyBaseline: 0.05,
+    noveltySigmaSpan: 2.5,
   },
   ppo: {
     gamma: 0.985,
@@ -126,6 +149,7 @@ export const CONFIG = Object.freeze({
     observeRenderHz: 30,
     probeRenderHz: 20,
     learnUiHz: 5,
+    curiosityRenderHz: 8,
   },
 });
 

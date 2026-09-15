@@ -4,6 +4,7 @@ import { CURRICULUM, CurriculumManager } from '../sim/curriculum.js';
 import { World } from '../sim/world.js';
 import { evaluateFullRetentionSuite } from '../evaluation/evaluator.js';
 import { RecurrentActorCritic } from './model.js';
+import { CuriosityModule } from './curiosity.js';
 import { PPOTrainer } from './ppo.js';
 import { computeGAE } from './rollout.js';
 
@@ -15,6 +16,7 @@ export class TrainingSession {
     this.autoCurriculum = autoCurriculum;
     this.model = new RecurrentActorCritic(seed);
     this.trainer = new PPOTrainer(this.model, seed ^ 0x9e3779b9);
+    this.curiosity = new CuriosityModule(seed ^ 0xc0decafe);
     this.curriculum = new CurriculumManager(0);
     this.actionRng = new PRNG(seed ^ 0xa5a5a5a5);
     this.totalSteps = 0;
@@ -54,6 +56,9 @@ export class TrainingSession {
     this.envs = [];
     this.obs = [];
     this.hidden = [];
+    this.curiosityEpisodeBudget = [];
+    this.lastCuriosity = null;
+    this.curiosityTrail = [];
     for (let i = 0; i < envCount; i++) this.addEnv(i);
     this.saveMilestone(0);
   }
@@ -85,6 +90,7 @@ export class TrainingSession {
     this.envs[id] = env;
     this.obs[id] = env.observe();
     this.hidden[id] = this.model.zeroHidden();
+    this.curiosityEpisodeBudget[id] = CONFIG.curiosity.maxEpisodeBonus;
   }
 
   resetEnv(id) {
@@ -95,6 +101,7 @@ export class TrainingSession {
     this.envs[id] = env;
     this.obs[id] = env.observe();
     this.hidden[id] = this.model.zeroHidden();
+    this.curiosityEpisodeBudget[id] = CONFIG.curiosity.maxEpisodeBonus;
   }
 
   recentRehearsalMix() {
@@ -109,6 +116,10 @@ export class TrainingSession {
     const completed = [];
     let curriculumEvent = null;
     let validationMs = 0;
+    let intrinsicRewardSum = 0;
+    let curiosityErrorSum = 0;
+    let curiosityNoveltySum = 0;
+    let curiositySampleCount = 0;
 
     const preValidationStarted = performanceNow();
     const preValidation = this.totalSteps >= this.nextValidationStep && this.lastValidationStep !== this.totalSteps ? this.runValidation() : null;
@@ -121,14 +132,55 @@ export class TrainingSession {
         const hPrev = this.hidden[i];
         const act = this.model.act(obs, hPrev, this.actionRng, false, false);
         const result = this.envs[i].step(act.action);
+        const remainingBudget = Number.isFinite(this.curiosityEpisodeBudget[i])
+          ? this.curiosityEpisodeBudget[i]
+          : CONFIG.curiosity.maxEpisodeBonus;
+        // Curiosity is intentionally sampled rather than evaluated on every world
+        // transition. Each sample is still a genuine one-step prediction; sparse
+        // sampling preserves the signal while protecting mobile training throughput.
+        const curiositySampled = this.envs[i].stepCount === 1 || (this.envs[i].stepCount % CONFIG.curiosity.sampleStride === 0);
+        let curiosity = null;
+        let intrinsicReward = 0;
+        if (curiositySampled) {
+          curiosity = this.curiosity.scoreTransition(obs, act.action, result.obs, {
+            remainingBudget,
+            terminal: result.done,
+            capture: i === 0,
+          });
+          intrinsicReward = curiosity.bonus;
+          this.curiosityEpisodeBudget[i] = Math.max(0, remainingBudget - intrinsicReward);
+          intrinsicRewardSum += intrinsicReward;
+          curiosityErrorSum += curiosity.error;
+          curiosityNoveltySum += curiosity.novelty;
+          curiositySampleCount++;
+          if (i === 0 && curiosity.obs) {
+            this.lastCuriosity = {
+              ...curiosity,
+              x: this.envs[i].agent.x,
+              y: this.envs[i].agent.y,
+              budgetRemaining: this.curiosityEpisodeBudget[i],
+              atSteps: this.totalSteps + 1,
+            };
+            if (curiosity.novelty > 0.05) {
+              this.curiosityTrail.push({ x: this.envs[i].agent.x, y: this.envs[i].agent.y, novelty: curiosity.novelty, atSteps: this.totalSteps + 1 });
+              if (this.curiosityTrail.length > 72) this.curiosityTrail.shift();
+            }
+          }
+        }
         transitions.push({
           env: i,
           obs: new Float64Array(obs),
+          nextObs: curiositySampled ? new Float64Array(result.obs) : null,
           hPrev: new Float64Array(hPrev),
           action: act.action,
           logProb: act.logProb,
           value: act.value,
-          reward: result.reward,
+          extrinsicReward: result.reward,
+          intrinsicReward,
+          reward: result.reward + intrinsicReward,
+          curiosityError: curiosity?.error ?? 0,
+          curiosityNovelty: curiosity?.novelty ?? 0,
+          curiositySampled,
           done: result.done,
         });
         this.totalSteps++;
@@ -165,7 +217,10 @@ export class TrainingSession {
     const ppoStarted = performanceNow();
     const ppo = this.trainer.update(transitions, advantages, returns, { trainingStep: this.totalSteps });
     const ppoMs = performanceNow() - ppoStarted;
-    const coreMs = Math.max(0.001, simulationMs + advantageMs + ppoMs);
+    const curiosityStarted = performanceNow();
+    const curiosityTrain = this.curiosity.trainBatch(transitions);
+    const curiosityMs = performanceNow() - curiosityStarted;
+    const coreMs = Math.max(0.001, simulationMs + advantageMs + ppoMs + curiosityMs);
     const recent = this.episodeHistory.slice(-40);
     const mean = key => recent.length ? recent.reduce((sum, x) => sum + (x[key] || 0), 0) / recent.length : 0;
 
@@ -196,6 +251,7 @@ export class TrainingSession {
         simulationMs,
         advantageMs,
         ppoMs,
+        curiosityMs,
         bookkeepingMs: bookkeepingBeforeValidationMs,
         validationMs,
         coreMs,
@@ -209,6 +265,17 @@ export class TrainingSession {
       rehearsalMix: this.recentRehearsalMix(),
       learnerLineage: { ...this.learnerLineage },
       learnerExperienceSteps: this.learnerExperienceSteps,
+      curiosity: {
+        meanIntrinsicReward: intrinsicRewardSum / Math.max(1, transitions.length),
+        intrinsicRewardSum,
+        meanPredictionError: curiosityErrorSum / Math.max(1, curiositySampleCount),
+        meanNovelty: curiosityNoveltySum / Math.max(1, curiositySampleCount),
+        samples: curiositySampleCount,
+        sampleFraction: curiositySampleCount / Math.max(1, transitions.length),
+        predictorLoss: curiosityTrain.loss,
+        predictorParams: this.curiosity.paramCount(),
+        errorBaseline: this.curiosity.errorMean,
+      },
       ...ppo,
     };
     this.metrics.push(metric);
@@ -379,6 +446,7 @@ export class TrainingSession {
       savedAtEpisodes: base?.savedAtEpisodes ?? this.totalEpisodes,
       model: base?.model ?? this.model.serialize(),
       optimizer: base?.optimizer ?? this.trainer.serialize(),
+      curiosity: base?.curiosity ?? this.curiosity.serialize(),
       curriculum: base?.curriculum ?? this.curriculum.serialize(),
       validation,
       source,
@@ -563,6 +631,7 @@ export class TrainingSession {
       promotionEvidence: cloneSerializable(brain.promotionEvidence || null),
       model: cloneSerializable(brain.model),
       optimizer: cloneSerializable(brain.optimizer || null),
+      curiosity: cloneSerializable(brain.curiosity || null),
     };
     this.hallOfFame.push(entry);
     return { entry, created: true };
@@ -583,6 +652,7 @@ export class TrainingSession {
       rehearsalEpisodeHistory: [...this.rehearsalEpisodeHistory],
       model: this.model.serialize(),
       optimizer: this.trainer.serialize(),
+      curiosity: this.curiosity.serialize(),
     };
     const idx = this.frozenLearners.findIndex(x => x.id === lineageId);
     if (idx >= 0) this.frozenLearners[idx] = entry;
@@ -618,6 +688,10 @@ export class TrainingSession {
     this.model.restore(source.model);
     if (source.optimizer) this.trainer.restore(source.optimizer);
     else this.trainer = new PPOTrainer(this.model, this.seed ^ 0x9e3779b9 ^ (this.lineageCounter + 1));
+    this.curiosity = new CuriosityModule(this.seed ^ 0xc0decafe ^ (this.lineageCounter + 1));
+    if (source.curiosity) this.curiosity.restore(source.curiosity);
+    this.lastCuriosity = null;
+    this.curiosityTrail = [];
     this.lineageCounter++;
     const lineage = {
       id: `L-${(this.seed >>> 0).toString(16)}-${this.lineageCounter}`,
@@ -679,6 +753,10 @@ export class TrainingSession {
     const preserved = this.freezeCurrentLearner('preserved-before-lineage-switch');
     this.model.restore(target.model);
     this.trainer.restore(target.optimizer);
+    this.curiosity = new CuriosityModule(this.seed ^ 0xc0decafe ^ (this.lineageCounter + 1));
+    if (target.curiosity) this.curiosity.restore(target.curiosity);
+    this.lastCuriosity = null;
+    this.curiosityTrail = [];
     this.curriculum.restore(target.curriculum || {});
     this.envSeedCursor = Number(target.envSeedCursor) || this.envSeedCursor;
     if (Number.isFinite(Number(target.actionRngState))) this.actionRng.state = Number(target.actionRngState) >>> 0;
@@ -707,7 +785,7 @@ export class TrainingSession {
 
   snapshot() {
     return {
-      schema: 6,
+      schema: 7,
       seed: this.seed,
       totalSteps: this.totalSteps,
       totalEpisodes: this.totalEpisodes,
@@ -716,6 +794,7 @@ export class TrainingSession {
       curriculum: this.curriculum.serialize(),
       model: this.model.serialize(),
       optimizer: this.trainer.serialize(),
+      curiosity: this.curiosity.serialize(),
       metrics: this.metrics,
       milestones: Array.from(this.milestones.entries()),
       nextMilestoneStep: this.nextMilestoneStep,
@@ -748,7 +827,7 @@ export class TrainingSession {
   }
 
   restore(data) {
-    if (!data || ![1, 2, 3, 4, 5, 6].includes(data.schema)) throw new Error('Unsupported checkpoint schema');
+    if (!data || ![1, 2, 3, 4, 5, 6, 7].includes(data.schema)) throw new Error('Unsupported checkpoint schema');
     this.seed = data.seed;
     this.actionRng = new PRNG(this.seed ^ 0xa5a5a5a5);
     this.hallOfFame = [];
@@ -760,6 +839,10 @@ export class TrainingSession {
     this.envSeedCursor = data.envSeedCursor || 0;
     this.model.restore(data.model);
     this.trainer.restore(data.optimizer);
+    this.curiosity = new CuriosityModule(this.seed ^ 0xc0decafe);
+    if (data.schema >= 7 && data.curiosity) this.curiosity.restore(data.curiosity);
+    this.lastCuriosity = null;
+    this.curiosityTrail = [];
     this.curriculum.restore(data.curriculum || {});
     if (data.schema < 3) this.curriculum.cooldownRemaining = Math.max(this.curriculum.cooldownRemaining, CONFIG.curriculum.transitionCooldownEpisodes);
     this.metrics = Array.isArray(data.metrics) ? data.metrics.slice(-CONFIG.runtime.chartPoints) : [];
@@ -769,7 +852,7 @@ export class TrainingSession {
       : nextHistoricalMilestoneAfter(this.totalSteps);
     if (data.schema === 1 && this.totalSteps > 0 && !this.milestones.has(this.totalSteps)) this.saveMilestone(this.totalSteps);
 
-    if (data.schema === 6 || data.schema === 5) {
+    if (data.schema === 7 || data.schema === 6 || data.schema === 5) {
       this.bestArchive = data.bestArchive && typeof data.bestArchive === 'object' ? data.bestArchive : {};
       this.bestBrain = this.bestArchive.balanced || data.bestBrain || null;
       this.validationHistory = Array.isArray(data.validationHistory) ? data.validationHistory.slice(-64) : [];
@@ -795,7 +878,7 @@ export class TrainingSession {
       this.rehearsalEpisodeHistory = Array.isArray(data.rehearsalEpisodeHistory)
         ? data.rehearsalEpisodeHistory.filter(x => Number.isInteger(x) && x >= 0 && x < CURRICULUM.length).slice(-CONFIG.continual.recentMixWindow)
         : [];
-      if (data.schema === 6) {
+      if (data.schema >= 6) {
         if (Number.isFinite(Number(data.actionRngState))) this.actionRng.state = Number(data.actionRngState) >>> 0;
         this.mergeHallOfFame(data.hallOfFame || []);
         this.frozenLearners = Array.isArray(data.frozenLearners)
