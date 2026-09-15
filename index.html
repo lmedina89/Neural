@@ -14,7 +14,7 @@
         <div class="eyebrow">MICROMIND • LEARNING LABORATORY</div>
         <h1>Watch a tiny brain actually learn.</h1>
       </div>
-      <div class="build" id="buildTag">v0.1.4.0.2 • SPAWNCLR-01402</div>
+      <div class="build" id="buildTag">v0.1.4.0.4 • DECHUD-01404</div>
     </header>
 
     <section class="controls" aria-label="Main controls">
@@ -108,7 +108,8 @@
           <div><span>return</span><b id="returnVal">0.00</b></div>
           <div><span>food</span><b id="foodVal">0.00</b></div>
           <div><span>entropy</span><b id="entropyVal">—</b></div>
-          <div><span>steps/sec</span><b id="speedVal">—</b></div>
+          <div><span>train rate 5s</span><b id="speedVal">—</b></div>
+          <div><span>train rate 30s</span><b id="speed30Val">—</b></div>
           <div><span>learn rate</span><b id="lrVal">—</b></div>
           <div><span>KL</span><b id="klVal">—</b></div>
           <div><span>PPO epochs</span><b id="epochsVal">—</b></div>
@@ -125,12 +126,17 @@
           <span>champion challenge <b id="promotionVal">—</b></span>
         </div>
         <div class="validationStrip performanceStrip">
-          <span>simulation <b id="simSpeedVal">—</b></span>
+          <span>raw simulation <b id="simSpeedVal">—</b></span>
           <span>PPO <b id="ppoMsVal">—</b></span>
           <span>browser FPS <b id="fpsVal">—</b></span>
           <span>UI <b id="uiMsVal">—</b></span>
           <span>validation <b id="validationMsVal">—</b></span>
           <span>storage <b id="storageMsVal">—</b></span>
+        </div>
+        <div class="validationStrip runtimeStrip">
+          <span>page <b id="pageStateVal">FOREGROUND</b></span>
+          <span>visuals <b id="visualStateVal">LIVE ACTIVE</b></span>
+          <span>rate meter <b id="meterStateVal">WARMING</b></span>
         </div>
       </article>
 
@@ -292,7 +298,7 @@
       <div class="collapsibleBody"><div id="resultsText" class="resultsText">No evaluation run yet.</div></div>
     </details>
 
-    <footer>MicroMind v0.1.4.0.2 preserves the Cognitive Observatory and mobile rendering hotfix while correcting only unfair wall-adjacent world spawns. Learning math, curiosity reward, curriculum, save schema, three-ray perception, and protected Champion behavior remain unchanged.</footer>
+    <footer>MicroMind v0.1.4.0.4 keeps the Decision HUD live at the lightweight UI cadence even when expensive LIVE canvases sleep off-screen. Runtime throughput diagnostics, visual fidelity, spawn clearance, learning math, curiosity, curriculum, save schema, three-ray perception, and protected Champion behavior remain unchanged.</footer>
   </main>
   <script type="module" src="./src/app/main.js"></script>
 </body>

@@ -1,45 +1,52 @@
-# MicroMind v0.1.4.0.2 — Build Report
+# MicroMind v0.1.4.0.4 — Build Report
 
-**Version:** `0.1.4.0.2`  
-**Build marker:** `SPAWNCLR-01402`  
-**Parent baseline:** v0.1.4.0.1 `VISPERF-01401`
+**Version:** `0.1.4.0.4`  
+**Build marker:** `DECHUD-01404`  
+**Parent baseline:** v0.1.4.0.3 `RUNTIME-01403`
 
 ## Objective
 
-Remove unfair episode starts caused by the original generation order (entities first, walls second) without scripting a wall-escape behavior, changing the three-sensor perception architecture, or retuning learning.
+Fix the iPhone-visible Decision card freeze introduced by the off-screen visualization performance optimization, without waking hidden canvases or changing learning behavior.
 
-## Root cause confirmed
+## Root cause
 
-The parent generator placed the agent, food and hazards before rectangular walls. Wall placement did not test clearance against those existing entities. A baseline audit over seeds 0–4,999 across all four curriculum stages found real clearance violations, including Scarcity seed `2`, where the agent center was inside a wall rectangle (`distance = 0`).
+`updateDecision()` was called from the LIVE canvas render branch. v0.1.4.0.1 correctly stopped World/Cognitive Flow rendering while those canvases were off-screen, but that also stopped the Decision card from receiving fresh action probabilities, value, energy and reward-component text. Training itself continued normally.
 
 ## Implementation
 
-1. Added exact point-to-rectangle clearance geometry using the already-existing `CONFIG.world.wallMargin`.
-2. Kept the legacy generation sequence unchanged.
-3. After walls are created, only entities that fail physical-radius + wall-margin clearance are corrected.
-4. Corrective placement uses the existing seeded PRNG and legacy entity-separation conventions.
-5. Added a deterministic center-out fallback if random corrective attempts cannot find a valid point.
-6. Applied the same wall validity check to food respawns after collection.
-7. Kept all three danger rays and the 10-element observation vector unchanged.
+1. `updateDecision()` now also runs from the normal lightweight `updateUI()` path.
+2. LEARN UI cadence remains 5 Hz, so the Decision card stays responsive without restoring expensive 12 Hz off-screen canvas work.
+3. Existing on-screen LIVE rendering is unchanged; the canvas render path may still refresh Decision opportunistically while visible.
+4. No hidden canvas is awakened by the Decision refresh.
+5. v0.1.4.0.3 rolling 5s/30s train-rate and foreground/visual-state diagnostics remain intact.
+
+## Safety / parity
+
+The learning/simulation files are intentionally unchanged from v0.1.4.0.3:
+
+- `src/ai/model.js`
+- `src/ai/ppo.js`
+- `src/ai/rollout.js`
+- `src/ai/session.js`
+- `src/ai/curiosity.js`
+- `src/sim/world.js`
+- `src/sim/curriculum.js`
+- `src/evaluation/evaluator.js`
+- `src/storage/checkpoints.js`
+- `src/utils/prng.js`
+
+All visualization renderer modules and `styles.css` are also unchanged. Save schema remains **9**.
 
 ## Verification
 
-- Test suite: **83/83 passed**.
-- Bulk geometry audit: **20,000 generated worlds** (5,000 seeds × 4 stages) produced **0** agent/food/hazard wall-or-boundary clearance failures.
-- Unit suite independently checks **8,000 generated worlds** (2,000 seeds × 4 stages) on every run.
-- Known trapped case: Scarcity seed `2` is deterministically relocated to a valid clear position.
-- Legacy-valid seed `77` / Obstacle Avoidance retains exact pre-hotfix agent, food, hazard and wall coordinates.
-- Food-respawn validation passed across 160 Scarcity seeds.
-- Policy, PPO, rollout, training session, curiosity, curriculum, evaluator, checkpoint, PRNG, all visualization renderers, app controller and CSS are byte-for-byte identical to v0.1.4.0.1. `world.js` is the intentional behavioral change; `config.js` changes only release identity while using the pre-existing `wallMargin` value.
-- No-wall deterministic continuation parity: v0.1.4.0.1 and v0.1.4.0.2 trained from the same seed with fixed Motor Nursery curriculum and finished with exactly equal policy weights, PPO optimizer state, curiosity predictor, curriculum state, rehearsal history, episode history, global steps/episodes and Learner experience.
-- Save schema remains **9**.
-- Build completed successfully.
-- Development performance smoke: ~**157.5k simulation steps/sec** in the simulation phase and ~**52.5k training steps/sec** in the Node harness on the final source tree. Browser/Safari throughput remains device-dependent.
+Verification is completed before packaging and recorded below in the final report update.
 
-## Intentional behavioral difference
+## Final verification results
 
-Worlds that were already valid remain unchanged. A seed that previously put the agent, food, or a hazard too close to/inside a wall will now generate a deterministic corrected position. This is the purpose of the hotfix and means those specific world trajectories can differ from the parent build.
-
-## Deferred perception change
-
-Rear danger rays are **not** part of this build. A future Perception v2 may deliberately test 5- or 7-ray sensing with controlled weight migration; that architecture change remains separate from this world-validity fix.
+- Full Node test suite: **87/87 passed**.
+- Static `dist/` rebuild completed successfully.
+- JavaScript syntax check passed for every source/script/test module.
+- Protected learning/simulation files, all visualization renderer modules, `styles.css`, and runtime throughput diagnostics are **byte-for-byte identical** to v0.1.4.0.3; the configuration body is identical after the release identity lines.
+- Deterministic parent/candidate continuation parity: same seed and **3,456 training steps** produced exactly equal policy weights, PPO optimizer state, curiosity predictor, curriculum, rehearsal history, action RNG, environment cursor, global steps and Learner experience.
+- Development performance harness: **42.3k wall-clock training steps/sec**; last inner simulation phase **156.2k raw simulation steps/sec**; PPO ~**3.6 ms** in the container environment. Browser/iPhone results remain device-dependent.
+- New regression contract test verifies the Decision HUD refresh is present in the lightweight UI path while the off-screen canvas sleeping condition remains intact.

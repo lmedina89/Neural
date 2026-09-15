@@ -1,5 +1,5 @@
-export const VERSION = '0.1.4.0.2';
-export const BUILD_MARKER = 'SPAWNCLR-01402';
+export const VERSION = '0.1.4.0.4';
+export const BUILD_MARKER = 'DECHUD-01404';
 
 export const CONFIG = Object.freeze({
   world: {

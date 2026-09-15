@@ -12,6 +12,7 @@ import { ChartRenderer } from '../visualization/chartRenderer.js';
 import { CuriosityRenderer } from '../visualization/curiosityRenderer.js';
 import { MemoryRenderer, projectHiddenState } from '../visualization/memoryRenderer.js';
 import { HistoryRenderer } from '../visualization/historyRenderer.js';
+import { RollingStepRate, formatRollingRate } from './runtimeDiagnostics.js';
 
 const $ = id => document.getElementById(id);
 const el = {
@@ -30,7 +31,8 @@ const el = {
   pinChampion: $('pinChampionBtn'), branchSelect: $('branchSelect'), switchBranch: $('switchBranchBtn'), hallOptions: $('hallBrainOptions'),
   experienceAge: $('experienceAgeVal'), researchLineage: $('researchLineageVal'), policyOrigin: $('policyOriginVal'), activeChampion: $('activeChampionVal'), hall: $('hallVal'), branches: $('branchesVal'), hallList: $('hallList'),
   researchCompactSummary: $('researchCompactSummary'),
-  simSpeed: $('simSpeedVal'), ppoMs: $('ppoMsVal'), fps: $('fpsVal'), uiMs: $('uiMsVal'), validationMs: $('validationMsVal'), storageMs: $('storageMsVal'),
+  simSpeed: $('simSpeedVal'), speed30: $('speed30Val'), ppoMs: $('ppoMsVal'), fps: $('fpsVal'), uiMs: $('uiMsVal'), validationMs: $('validationMsVal'), storageMs: $('storageMsVal'),
+  pageState: $('pageStateVal'), visualState: $('visualStateVal'), meterState: $('meterStateVal'),
   curiosityCanvas: $('curiosityCanvas'), curiosityError: $('curiosityErrorVal'), curiosityNovelty: $('curiosityNoveltyVal'), curiosityBonus: $('curiosityBonusVal'),
   curiosityBudget: $('curiosityBudgetVal'), curiosityLoss: $('curiosityLossVal'), curiosityParams: $('curiosityParamsVal'), curiosityInspect: $('curiosityInspect'),
   curiosityInfluence: $('curiosityInfluenceVal'), curiosityApplied: $('curiosityAppliedVal'), curiosityShare: $('curiosityShareVal'),
@@ -55,6 +57,7 @@ const archiveLabels = { balanced: 'CHAMPION BALANCED', overall: 'CHAMPION OVERAL
 let mode = 'LEARN', paused = false, trainBusy = false, observeAccum = 0, lastFrame = performance.now(), viewSeedIndex = 0;
 let lastVisualRender = 0, lastCuriosityRender = 0, lastMemoryRender = 0, lastHistoryRender = 0, lastMemoryCaptureCheck = 0, lastUiPaint = 0, lastUiDurationMs = 0, lastStorageDurationMs = 0, browserFps = 60, rafFrames = 0, rafWindowStart = performance.now(), adaptiveDelay = 8, controlSignature = '';
 let activeObservatoryView = 'live';
+const trainRate = new RollingStepRate({ windowsMs: [5000, 30000], sampleIntervalMs: 120 });
 let memoryPoints = [], memoryLastSampleAt = 0, memoryLastStep = -1, memoryLastSourceKey = '', memoryLineageId = null, memoryLastEpisode = -1;
 const MEMORY_MAX_POINTS = 320;
 
@@ -80,7 +83,23 @@ function installCanvasVisibilityObserver(canvases) {
   }, { root: null, rootMargin: '48px 0px 48px 0px', threshold: 0 });
   for (const node of nodes) canvasVisibilityObserver.observe(node);
 }
+function currentVisualState() {
+  if (document.hidden) return 'BACKGROUND IDLE';
+  if (activeObservatoryView === 'live') {
+    const active = canvasVisible(el.world) || canvasVisible(el.brain);
+    return active ? 'LIVE ACTIVE' : 'LIVE OFFSCREEN-IDLE';
+  }
+  if (activeObservatoryView === 'predict') {
+    const active = canvasVisible(el.predictWorld) || canvasVisible(el.curiosityCanvas);
+    return active ? 'PREDICT ACTIVE' : 'PREDICT OFFSCREEN-IDLE';
+  }
+  if (activeObservatoryView === 'memory') return canvasVisible(el.memoryCanvas) ? 'MEMORY ACTIVE' : 'MEMORY OFFSCREEN-IDLE';
+  if (activeObservatoryView === 'history') return canvasVisible(el.historyCanvas) ? 'HISTORY ACTIVE' : 'HISTORY OFFSCREEN-IDLE';
+  return 'RESEARCH IDLE';
+}
+function resetTrainRateMeter() { trainRate.reset(performance.now(), session.totalSteps); }
 let session = new TrainingSession({ seed: 1337, envCount: CONFIG.runtime.trainEnvs });
+trainRate.reset(performance.now(), session.totalSteps);
 let archiveModelCache = null, archiveModelCacheKey = null;
 let viewWorld = createViewWorld();
 let viewObs = viewWorld.observe(), viewHidden = session.model.zeroHidden(), lastSnapshot = session.model.forward(viewObs, viewHidden);
@@ -216,6 +235,7 @@ async function restoreCheckpointRecord(record, label) {
   paused = true;
   el.pause.textContent = 'Resume';
   session.restore(cp);
+  resetTrainRateMeter();
   resetMemoryConstellation();
   await hydratePersistentHall({ pinMigrationBaseline: cp.schema <= 6 });
   archiveModelCache = null;
@@ -292,6 +312,7 @@ function resetViewState() {
 }
 function setMode(next) {
   mode = next;
+  resetTrainRateMeter();
   paused = false;
   el.pause.textContent = 'Pause';
   el.mode.textContent = next;
@@ -312,6 +333,7 @@ function setMode(next) {
 function resetBrain() {
   const preservedHall = session.exportHallOfFame();
   session = new TrainingSession({ seed: (Date.now() >>> 0), envCount: CONFIG.runtime.trainEnvs });
+  resetTrainRateMeter();
   session.mergeHallOfFame(preservedHall);
   archiveModelCache = null;
   archiveModelCacheKey = null;
@@ -481,6 +503,7 @@ function cognitiveFx(model, snapshot, world) {
 function frame(now) {
   const dt = Math.min(100, now - lastFrame);
   lastFrame = now;
+  if (!document.hidden) trainRate.sample(now, session.totalSteps);
   rafFrames++;
   const rafWindow = now - rafWindowStart;
   if (rafWindow >= 1000) {
@@ -576,13 +599,21 @@ function policyOriginText() {
 
 function updateUI() {
   const uiStarted = performance.now();
+  // Decision HUD is lightweight and must stay live even when expensive LIVE
+  // canvases are sleeping off-screen. The normal LEARN UI cadence is 5 Hz,
+  // which is fast enough for readable action/value feedback without waking any
+  // canvas or changing simulation/training behavior.
+  updateDecision();
   const m = session.metrics.at(-1);
   el.steps.textContent = session.totalSteps.toLocaleString();
   el.episodes.textContent = session.totalEpisodes.toLocaleString();
   el.ret.textContent = (m?.meanReturn ?? 0).toFixed(2);
   el.food.textContent = (m?.meanFood ?? 0).toFixed(2);
   el.entropy.textContent = m?.entropy?.toFixed(3) ?? '—';
-  el.speed.textContent = m?.throughput ? Math.round(m.throughput).toLocaleString() : '—';
+  const train5 = trainRate.stats(5000);
+  const train30 = trainRate.stats(30000);
+  el.speed.textContent = mode === 'LEARN' && !paused ? formatRollingRate(train5) : '—';
+  el.speed30.textContent = mode === 'LEARN' && !paused ? formatRollingRate(train30) : '—';
   el.lr.textContent = Number.isFinite(m?.learningRate) ? m.learningRate.toExponential(2) : session.trainer.learningRate.toExponential(2);
   el.kl.textContent = Number.isFinite(m?.maxEpochKL) ? m.maxEpochKL.toFixed(4) : '—';
   el.epochs.textContent = Number.isFinite(m?.epochsRun) ? `${m.epochsRun}${m.earlyStopped ? ' stop' : ''}` : '—';
@@ -603,7 +634,11 @@ function updateUI() {
   el.promotion.textContent = pending.length ? pending.join(' • ') : 'none pending';
 
   const profile = m?.profile || {};
-  el.simSpeed.textContent = Number.isFinite(profile.simulationStepsPerSec) ? `${Math.round(profile.simulationStepsPerSec).toLocaleString()}/s` : '—';
+  el.simSpeed.textContent = Number.isFinite(profile.simulationStepsPerSec) ? `${Math.round(profile.simulationStepsPerSec).toLocaleString()}/s raw` : '—';
+  el.pageState.textContent = document.hidden ? 'BACKGROUND' : 'FOREGROUND';
+  el.visualState.textContent = currentVisualState();
+  const meterReady = train5.ready && train30.ready;
+  el.meterState.textContent = meterReady ? 'ROLLING READY' : 'WARMING';
   el.ppoMs.textContent = Number.isFinite(profile.ppoMs) ? `${profile.ppoMs.toFixed(1)} ms` : '—';
   el.fps.textContent = `${browserFps.toFixed(0)}`;
   el.validationMs.textContent = Number.isFinite(profile.validationMs) && profile.validationMs > 0 ? `${profile.validationMs.toFixed(0)} ms` : '—';
@@ -949,11 +984,19 @@ async function compareBrains() {
 function yieldUI() { return new Promise(resolve => setTimeout(resolve, 20)); }
 function title(s) { return s.charAt(0).toUpperCase() + s.slice(1); }
 
+document.addEventListener('visibilitychange', () => {
+  // Safari may suspend timers/rAF while backgrounded. Reset wall-clock rate windows
+  // on either transition so foreground throughput is never contaminated by a
+  // background pause or by the first burst after the page resumes.
+  resetTrainRateMeter();
+  maybeUpdateUI(true);
+});
+
 el.newBrain.addEventListener('click', () => { if (confirm('Create a new untrained brain? Current unsaved progress will be replaced.')) resetBrain(); });
 el.learn.addEventListener('click', () => setMode('LEARN'));
 el.observe.addEventListener('click', () => setMode('OBSERVE'));
 el.probe.addEventListener('click', () => setMode('PROBE'));
-el.pause.addEventListener('click', () => { paused = !paused; el.pause.textContent = paused ? 'Resume' : 'Pause'; setStatus(paused ? 'Paused. Neural state remains inspectable.' : 'Resumed.'); });
+el.pause.addEventListener('click', () => { paused = !paused; resetTrainRateMeter(); el.pause.textContent = paused ? 'Resume' : 'Pause'; setStatus(paused ? 'Paused. Neural state remains inspectable.' : 'Resumed.'); });
 el.brainView.addEventListener('change', () => { neuralRenderer.mode = el.brainView.value; });
 el.worldFx?.addEventListener('change', () => {
   worldRenderer.overlayMode = el.worldFx.value;
@@ -1056,6 +1099,7 @@ el.switchCuriosityAudit.addEventListener('click', async () => {
   el.pause.textContent = 'Resume';
   try {
     const event = session.switchCuriosityAuditBranch(nextRole);
+    resetTrainRateMeter();
     await saveCheckpoint(session.snapshot(), 'autosave');
     controlSignature = '';
     el.brainSource.value = 'latest';
@@ -1086,6 +1130,7 @@ el.switchBranch.addEventListener('click', () => {
   if (!confirm(`Switch active training to frozen Learner ${id}? The current Learner will be frozen first. Champions and Hall of Fame are shared; global experience age remains monotonic.`)) return;
   try {
     const event = session.switchToFrozenLearner(id);
+    resetTrainRateMeter();
     archiveModelCache = null;
     archiveModelCacheKey = null;
     controlSignature = '';
