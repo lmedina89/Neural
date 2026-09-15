@@ -18,7 +18,7 @@ const el = {
   foragerOption: $('foragerOption'), survivorOption: $('survivorOption'), efficiencyOption: $('efficiencyOption'), restoreBest: $('restoreBestBtn'),
   save: $('saveBtn'), loadManual: $('loadManualBtn'), loadAutosave: $('loadAutosaveBtn'), test: $('testBtn'), compare: $('compareBtn'),
   mode: $('modeBadge'), status: $('statusText'), world: $('worldCanvas'), brain: $('brainCanvas'), chart: $('chartCanvas'),
-  worldMeta: $('worldMeta'), probeTools: $('probeTools'), brainView: $('brainView'), viewBrainBadge: $('viewBrainBadge'), inspect: $('inspectText'),
+  worldMeta: $('worldMeta'), probeTools: $('probeTools'), worldFx: $('worldFx'), worldFxBadge: $('worldFxBadge'), brainView: $('brainView'), viewBrainBadge: $('viewBrainBadge'), inspect: $('inspectText'),
   steps: $('stepsVal'), episodes: $('episodesVal'), ret: $('returnVal'), food: $('foodVal'), entropy: $('entropyVal'), speed: $('speedVal'),
   lr: $('lrVal'), kl: $('klVal'), epochs: $('epochsVal'), paramCount: $('paramCount'), actionBars: $('actionBars'), energy: $('energyBar'),
   energyText: $('energyText'), curriculum: $('curriculumText'), rewardParts: $('rewardParts'), value: $('valueText'), results: $('resultsText'),
@@ -54,6 +54,8 @@ let viewWorld = createViewWorld();
 let viewObs = viewWorld.observe(), viewHidden = session.model.zeroHidden(), lastSnapshot = session.model.forward(viewObs, viewHidden);
 const viewRng = new PRNG(0xabc123);
 const worldRenderer = new WorldRenderer(el.world), neuralRenderer = new NeuralRenderer(el.brain), chartRenderer = new ChartRenderer(el.chart), curiosityRenderer = new CuriosityRenderer(el.curiosityCanvas);
+worldRenderer.overlayMode = el.worldFx?.value || 'BOTH';
+if (el.worldFxBadge && el.worldFx) el.worldFxBadge.textContent = el.worldFx.options[el.worldFx.selectedIndex]?.textContent?.toUpperCase() || 'ATTN + ECHO';
 const actionUi = ACTIONS.map(action => {
   const row = document.createElement('div');
   row.className = 'actionRow';
@@ -365,6 +367,15 @@ function cognitiveFx(model, snapshot, world) {
   const secondProb = Number(probs[second]) || 0;
   const rp = world?.lastRewardParts || {};
   const reward = Object.values(rp).reduce((a, v) => a + (Number(v) || 0), 0);
+  const predictionEcho = mode === 'LEARN' && session.lastCuriosity?.prediction && session.lastCuriosity?.nextObs
+    ? {
+        prediction: Array.from(session.lastCuriosity.prediction),
+        actual: Array.from(session.lastCuriosity.nextObs),
+        action: Number(session.lastCuriosity.action),
+        error: Number(session.lastCuriosity.error || 0),
+        novelty: Number(session.lastCuriosity.novelty || 0),
+      }
+    : null;
   return {
     inputInfluence: influence,
     dominantAction: first,
@@ -372,6 +383,7 @@ function cognitiveFx(model, snapshot, world) {
     decisionConfidence: Math.max(0, dominantProb - secondProb),
     curiosityNovelty: mode === 'LEARN' ? Number(session.lastCuriosity?.novelty || 0) : 0,
     curiosityError: mode === 'LEARN' ? Number(session.lastCuriosity?.error || 0) : 0,
+    predictionEcho,
     reward,
   };
 }
@@ -398,6 +410,7 @@ function frame(now) {
     lastVisualRender = now;
     const model = selectedViewModel();
     const fx = cognitiveFx(model, lastSnapshot, viewWorld);
+    worldRenderer.overlayMode = el.worldFx?.value || 'BOTH';
     worldRenderer.draw(viewWorld, mode + (paused ? ' • PAUSED' : ''), mode === 'LEARN' ? session.curiosityTrail : [], fx, now);
     neuralRenderer.mode = el.brainView.value;
     neuralRenderer.draw(model, lastSnapshot, fx, now);
@@ -825,6 +838,10 @@ el.observe.addEventListener('click', () => setMode('OBSERVE'));
 el.probe.addEventListener('click', () => setMode('PROBE'));
 el.pause.addEventListener('click', () => { paused = !paused; el.pause.textContent = paused ? 'Resume' : 'Pause'; setStatus(paused ? 'Paused. Neural state remains inspectable.' : 'Resumed.'); });
 el.brainView.addEventListener('change', () => { neuralRenderer.mode = el.brainView.value; });
+el.worldFx?.addEventListener('change', () => {
+  worldRenderer.overlayMode = el.worldFx.value;
+  if (el.worldFxBadge) el.worldFxBadge.textContent = el.worldFx.options[el.worldFx.selectedIndex]?.textContent?.toUpperCase() || 'VISUAL';
+});
 el.brainSource.addEventListener('change', () => {
   const ref = selectedBrainRef();
   if (ref.type !== 'learner' && !ref.brain?.model) { el.brainSource.value = 'latest'; return; }

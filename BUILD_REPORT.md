@@ -1,124 +1,87 @@
-# MicroMind v0.1.3.3 — Build Report
+# MicroMind v0.1.3.4 — Build Report
 
-**Milestone:** Neural Flow & Cognitive FX  
-**Build marker:** `NEURAFX-0133`  
-**Baseline:** exact packaged v0.1.3.2 `STABOBS-0132`  
-**Baseline archive SHA-256:** `5f9e6eaea59027b87a54bec10fb6c75778c4b1374621e88b7455c0362a34a745`  
+**Milestone:** Prediction Echo & Attention Fields  
+**Build marker:** `PREDATTN-0134`  
+**Baseline:** exact packaged v0.1.3.3 `NEURAFX-0133`  
+**Baseline archive SHA-256:** `91625797de1f148716fc8bae2cea47bc61288b0e951377fb8214a161346ddc3f`  
 **Save schema:** 9 (unchanged; loads schemas 1–9)
 
 ## Purpose
 
-The project started as a learning laboratory, but the primary experience is also supposed to make the AI itself visible. v0.1.3.3 therefore upgrades the live visualization without retuning the learner.
+The v0.1.3.3 Cognitive Flow view made the real recurrent policy visually alive. v0.1.3.4 adds the two other visual systems requested for the simulator itself: a world-linked **Attention Field** and a learned-model **Prediction Echo**.
 
-The design rule is strict: the new effects are driven by real model state and existing telemetry. They do not invent a second decorative “brain” that can disagree with the actual policy.
+The design rule remains strict: every effect must be driven by real MicroMind state or real predictor telemetry. No decorative effect is allowed to feed back into learning.
 
-## Cognitive Flow mode
+## Attention Field
 
-The Live Brain selector now defaults to **Cognitive Flow** while retaining Active, Weights, and Strongest modes.
+The running policy's normalized real input influence is projected back into the world:
 
-Cognitive Flow uses the real policy forward pass to render:
+- food x/y/distance influence controls the nearest-food field intensity and salience line;
+- danger L/F/R influence controls each actual sensor ray and contact-region glow independently;
+- energy influence controls a subtle pressure ring around the agent;
+- dominant action/confidence and novelty continue to drive the existing agent cognitive FX.
 
-- sensory input activations;
-- sensory-to-hidden influence through the actual `wx` weights;
-- recurrent memory links through the actual `wh` matrix and previous hidden state;
-- hidden-to-policy influence through the actual `wp` weights;
-- hidden-to-value influence through the actual `wv` weights;
-- policy probabilities and value estimate;
-- moving light pulses along the strongest currently active pathways;
-- a decision beam from the highest-probability policy output;
-- brighter node glow for strongly active/influential units.
+This provides a direct visual chain from **world → sensors → influence → decision** without altering the world or agent.
 
-The hidden layer is arranged as a compact “cognitive core” only for presentation. Node placement does not change the network itself.
+## Prediction Echo / Echo Lens
 
-## Signature light effect: Cognitive Halo
+The 441-parameter curiosity model already predicts nine dynamic sensory features. v0.1.3.4 turns one genuine sampled env-0 transition into an agent-local visual lens inside the World panel:
 
-A multi-ring **Cognitive Halo** surrounds the recurrent core. Its motion and intensity are data-driven:
+- gold hollow marks are **predicted next sensory values**;
+- cyan filled marks are **actual next sensory values**;
+- the line between them is literal prediction mismatch;
+- food x/y become a paired local vector;
+- danger L/F/R become paired points on the three local ray directions;
+- speed, turn rate and energy errors become compact orbit arcs;
+- the surrounding pulse is driven by actual prediction error and novelty.
 
-- decision-confidence gap changes halo emphasis;
-- curiosity novelty contributes magenta activity;
-- current external reward contributes warm/gold activity;
-- real novelty/reward events can generate small star-like sparks.
+The lens is deliberately sensor-local. Training can advance thousands of environment transitions between browser frames; projecting a sampled historical prediction onto the current physical object positions would imply false precision. The lens therefore shows exactly what the predictor knew: sensory prediction versus sensory outcome.
 
-This is a read-only visual mapping of existing signals, not an additional reward or learning mechanism.
+## Compact control
 
-## World-linked cognition
+The World header now includes one compact selector:
 
-The world view now connects the visible brain to what the agent is actually sensing and choosing:
+- Attention + Echo
+- Attention Field
+- Prediction Echo
+- Clean World
 
-- danger-ray brightness is modulated by real normalized sensory influence;
-- the nearest food can receive a salience ring/path when food sensors are influential;
-- the agent receives a confidence/novelty halo;
-- the dominant policy action receives a short directional decision-light cue.
-
-The underlying world, observations, rewards, physics, actions, and agent behavior are unchanged.
-
-## Curiosity / prediction visualization
-
-The existing 441-parameter learned forward model now has a more literal visual explanation:
-
-- real state/action → predictor → next-sensory pathways carry moving activity pulses;
-- output labels explicitly show **PREDICTED → ACTUAL**;
-- each sensory output has a ghost marker displaced according to real prediction mismatch;
-- prediction-error rings/halo remain tied to actual predictor error and novelty.
-
-Curiosity reward math, predictor training, evaluation isolation, budget, and coefficient are unchanged.
+No new long diagnostic section was added. This keeps the page-height work from v0.1.3.2 intact.
 
 ## Learning invariants
 
-The following v0.1.3.2 core files are byte-for-byte identical in v0.1.3.3:
+The learning-critical model/PPO/session/curiosity/world/curriculum/evaluation/storage/PRNG files are byte-for-byte identical to v0.1.3.3.
 
-- `src/ai/model.js`
-- `src/ai/ppo.js`
-- `src/ai/rollout.js`
-- `src/ai/session.js`
-- `src/ai/curiosity.js`
-- `src/sim/world.js`
-- `src/sim/curriculum.js`
-- `src/evaluation/evaluator.js`
-- `src/storage/checkpoints.js`
-- `src/utils/prng.js`
+Therefore v0.1.3.4 does **not** change:
 
-Only release identity, UI/app read-only telemetry plumbing, visualization renderers, CSS, tests, and documentation changed.
+- 1,040-parameter recurrent policy architecture;
+- 441-parameter curiosity predictor architecture or training;
+- PPO coefficients, optimizer, KL guards or gradient limits;
+- external/intrinsic reward math;
+- curriculum and rehearsal mix;
+- observations, actions or world physics;
+- Champion, Hall-of-Fame and branch rules;
+- Stability Observatory semantics;
+- validation/final-holdout protocols;
+- save schema 9.
 
-Therefore this release does **not** change:
+## QA
 
-- the 1,040-parameter recurrent policy;
-- the 441-parameter curiosity predictor;
-- PPO learning/optimizer rules;
-- rewards or curiosity strength;
-- curriculum/rehearsal distribution;
-- observations/actions/world physics;
-- Champion/Hall/branch behavior;
-- stability-observatory semantics;
-- evaluation protocols;
-- save schema.
-
-## Mobile/performance strategy
-
-The richer visualization remains throttled by the existing render schedule rather than running on every simulation step. Cognitive Flow limits the number of drawn edges and moving pulses, caps DPR at 2, and keeps the long research panels collapsible. The curiosity canvas still avoids redraw while its panel is collapsed.
-
-No attempt was made to increase training render frequency.
-
-## QA recovered and completed
-
-The interrupted first pass was recovered before release. The incomplete draft had a stale root HTML version tag/missing Cognitive Flow selector and stale v0.1.3.2 documentation; those were corrected before final packaging.
-
-Final checks:
-
-- `npm test`: **71/71 PASS**.
-- `npm run check`: PASS, including fresh static `dist/` build.
-- development performance smoke: ~39.6k wall-clock steps/sec; latest profiled simulation ~133.8k steps/sec; PPO ~4.03 ms; curiosity update ~0.18 ms. These are development-machine measurements, not iPhone guarantees.
-- v0.1.3.2 learning-critical files: byte-for-byte parity PASS.
-- Cognitive Flow static wiring checks for recurrent memory, value paths, pulses, halo, world influence and prediction ghosts: PASS.
-- schema remains 9: PASS.
+- `npm test`: **73/73 PASS**.
+- `npm run check`: PASS; static `dist/` rebuilt successfully.
+- JavaScript syntax checks for the modified app/renderer: PASS.
+- local HTTP resource smoke for config, world renderer and app wiring: PASS.
+- v0.1.3.3 learning-critical parity: PASS for all ten protected files.
+- development performance smoke: ~44.7k wall-clock steps/sec; latest profiled simulation ~102.3k steps/sec; PPO ~4.58 ms; curiosity update ~0.54 ms. Development-machine measurements only, not iPhone guarantees.
 
 ## Physical acceptance test
 
-1. Keep the current v0.1.3.2 Manual Save before deployment.
-2. Deploy and verify `v0.1.3.3 • NEURAFX-0133`.
-3. Load the intended learner and verify the same lineage, global/branch steps, Champion, Hall, frozen branches, curiosity mode, and stability history.
-4. Keep training paused initially and set **Live Brain → Cognitive Flow** (it is the new default).
-5. In Probe or Observe, watch the network while moving food/hazards or while the agent acts. Pulses, input salience and the decision beam should change with the real policy.
-6. Open Curiosity / Prediction briefly during Learn. Prediction ghosts and error effects should track the displayed predicted-versus-actual values.
-7. Resume the same stability-observation run. v0.1.3.3 is visual-only and should not invalidate the v0.1.3.2 PPO evidence already being collected.
-8. On iPhone, watch browser FPS/heat for several minutes. If the richer brain view is too expensive, switch the Live Brain selector back to Active/Strongest without affecting training.
+1. Keep a Manual Save of the real long-running learner before deployment.
+2. Deploy and verify `v0.1.3.4 • PREDATTN-0134`.
+3. If the page starts with a throwaway fresh brain, **do not save it**; load the intended Manual Save first.
+4. Verify lineage, total steps, Champion, Hall, branches, curiosity mode and stability history survived unchanged.
+5. In the World header leave **Attention + Echo** selected initially.
+6. In Observe/Probe, move food/hazards and confirm the Attention Field changes with the real sensor/policy state.
+7. During Learn, the Prediction Echo lens should appear when curiosity has a sampled env-0 transition. Gold is prediction; cyan is actual.
+8. Switch among Attention / Echo / Clean World to confirm the overlays are visual-only and can be disabled instantly.
+9. Watch iPhone FPS and heat for several minutes. If needed, use Clean World and a simpler Live Brain mode during unattended training without affecting the learner.

@@ -1,45 +1,63 @@
-# MicroMind v0.1.3.3 — Neural Flow & Cognitive FX
+# MicroMind v0.1.3.4 — Prediction Echo & Attention Fields
 
 MicroMind is a browser-based miniature AI research lab. A real **1,040-parameter recurrent actor-critic** learns with PPO in procedural worlds while its policy, recurrent state, decisions, rewards, Champion history, stability telemetry, and separate **441-parameter curiosity predictor** can be inspected live.
 
-**Build:** `NEURAFX-0133`  
+**Build:** `PREDATTN-0134`  
 **Save schema:** 9
 
 ## What this release changes
 
-v0.1.3.3 is a **visualization milestone**, not a learning retune.
+v0.1.3.4 is another **visualization-only milestone** on top of v0.1.3.3 Neural Flow & Cognitive FX.
 
-The new default **Cognitive Flow** brain view turns real runtime signals into a more expressive living-network display:
+The World panel now has a compact cognitive-overlay selector:
 
-- moving pulses follow currently strong sensory, recurrent-memory, policy and value pathways;
-- the 24 recurrent units form a compact visual cognitive core;
-- actual recurrent `wh` connections become visible memory arcs;
-- the winning policy output emits a confidence-weighted decision beam;
-- a data-driven Cognitive Halo responds to decision confidence, novelty and current reward;
-- real novelty/reward can produce brief halo sparks;
-- sensor influence is echoed back into the world as food salience, danger-ray emphasis and agent/action light cues.
+- **Attention + Echo** (default)
+- **Attention Field**
+- **Prediction Echo**
+- **Clean World**
 
-The Curiosity / Prediction visualization now makes the forward model easier to read: it shows moving predictor activity plus real **predicted → actual** sensory values and ghost markers for mismatch.
+### Attention Field
 
-## These effects are not fake AI
+Real sensory influence from the running policy is projected back into the simulated world:
 
-The new graphics are derived from the actual model and telemetry already used by MicroMind:
+- food influence creates a cyan/green light field and salience path around the nearest real food;
+- danger influence brightens the real three danger rays and their sensed contact regions;
+- energy influence adds a restrained violet pressure ring around the agent;
+- the existing decision/confidence/novelty cues remain tied to actual policy outputs.
 
-- observation values;
-- hidden and previous-hidden activations;
-- `wx`, `wh`, `wp`, and `wv` weights;
-- policy probabilities;
-- critic value estimate;
-- current external reward components;
-- curiosity prediction error and novelty.
+The overlay is strictly read-only. It does not alter observations, rewards, actions, physics, or learning.
 
-The visualization layer never updates the policy, optimizer, predictor, curriculum, Champion, Hall, branch state, or evaluation history.
+### Prediction Echo
 
-## Learning behavior remains v0.1.3.2
+The curiosity forward model now gets a separate **Echo Lens** inside the World view.
 
-The learning-critical model/PPO/session/curiosity/world/curriculum/evaluation/storage files are byte-for-byte unchanged from `STABOBS-0132`. The Stability Observatory therefore continues the same experiment that was already running; this release only gives the AI a richer live visual representation.
+The lens visualizes one genuine sampled env-0 transition in agent-local sensor space:
 
-The existing Active, Weights, and Strongest brain modes remain available if you want a simpler or lighter view on iPhone.
+- **gold / hollow** markers = the forward model's predicted next sensory state;
+- **cyan / filled** markers = the actual next sensory state;
+- food x/y become paired vector markers;
+- the three danger channels become paired proximity markers on fixed local sensor rays;
+- speed, turn-rate and energy mismatch appear as short orbit arcs;
+- the lens halo strength follows real predictor error and novelty.
+
+The Echo Lens intentionally lives in sensor space rather than pretending an older sampled training transition is the current physical world position at high training speed.
+
+## Learning behavior is unchanged
+
+The following learning-critical files are byte-for-byte identical to v0.1.3.3 `NEURAFX-0133`:
+
+- `src/ai/model.js`
+- `src/ai/ppo.js`
+- `src/ai/rollout.js`
+- `src/ai/session.js`
+- `src/ai/curiosity.js`
+- `src/sim/world.js`
+- `src/sim/curriculum.js`
+- `src/evaluation/evaluator.js`
+- `src/storage/checkpoints.js`
+- `src/utils/prng.js`
+
+So this release does **not** retune PPO, curiosity, rewards, curriculum/rehearsal, Champion logic, evaluation, branch behavior, or saves.
 
 ## Run locally
 
