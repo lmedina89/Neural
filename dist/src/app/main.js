@@ -53,16 +53,40 @@ $('buildTag').textContent = `v${VERSION} • ${BUILD_MARKER}`;
 const budgets = { eco: { rollout: 8, delay: 30 }, balanced: { rollout: 18, delay: 10 }, adaptive: { rollout: 18, delay: 8 }, max: { rollout: 36, delay: 0 } };
 const archiveLabels = { balanced: 'CHAMPION BALANCED', overall: 'CHAMPION OVERALL', forager: 'CHAMPION FORAGER', survivor: 'CHAMPION SURVIVOR', efficiency: 'CHAMPION EFFICIENCY' };
 let mode = 'LEARN', paused = false, trainBusy = false, observeAccum = 0, lastFrame = performance.now(), viewSeedIndex = 0;
-let lastVisualRender = 0, lastCuriosityRender = 0, lastMemoryRender = 0, lastHistoryRender = 0, lastUiPaint = 0, lastUiDurationMs = 0, lastStorageDurationMs = 0, browserFps = 60, rafFrames = 0, rafWindowStart = performance.now(), adaptiveDelay = 8, controlSignature = '';
+let lastVisualRender = 0, lastCuriosityRender = 0, lastMemoryRender = 0, lastHistoryRender = 0, lastMemoryCaptureCheck = 0, lastUiPaint = 0, lastUiDurationMs = 0, lastStorageDurationMs = 0, browserFps = 60, rafFrames = 0, rafWindowStart = performance.now(), adaptiveDelay = 8, controlSignature = '';
 let activeObservatoryView = 'live';
 let memoryPoints = [], memoryLastSampleAt = 0, memoryLastStep = -1, memoryLastSourceKey = '', memoryLineageId = null, memoryLastEpisode = -1;
 const MEMORY_MAX_POINTS = 320;
+
+// Rendering is observational, so expensive canvases may sleep while they are
+// outside the visual viewport. IntersectionObserver avoids synchronous layout
+// reads on every animation frame. The last rendered frame stays on the canvas,
+// so scrolling back into view looks identical and rendering resumes immediately.
+const canvasVisibility = new WeakMap();
+let canvasVisibilityObserver = null;
+function canvasVisible(canvas) {
+  if (!canvas || canvas.closest?.('[hidden]')) return false;
+  const known = canvasVisibility.get(canvas);
+  if (typeof known === 'boolean') return known;
+  const r = canvas.getBoundingClientRect();
+  return r.width > 1 && r.height > 1 && r.bottom >= -8 && r.right >= -8 && r.top <= (globalThis.innerHeight || 0) + 8 && r.left <= (globalThis.innerWidth || 0) + 8;
+}
+function installCanvasVisibilityObserver(canvases) {
+  const nodes = canvases.filter(Boolean);
+  if (!nodes.length || typeof IntersectionObserver === 'undefined') return;
+  canvasVisibilityObserver?.disconnect?.();
+  canvasVisibilityObserver = new IntersectionObserver(entries => {
+    for (const entry of entries) canvasVisibility.set(entry.target, entry.isIntersecting && entry.intersectionRect.width > 0 && entry.intersectionRect.height > 0);
+  }, { root: null, rootMargin: '48px 0px 48px 0px', threshold: 0 });
+  for (const node of nodes) canvasVisibilityObserver.observe(node);
+}
 let session = new TrainingSession({ seed: 1337, envCount: CONFIG.runtime.trainEnvs });
 let archiveModelCache = null, archiveModelCacheKey = null;
 let viewWorld = createViewWorld();
 let viewObs = viewWorld.observe(), viewHidden = session.model.zeroHidden(), lastSnapshot = session.model.forward(viewObs, viewHidden);
 const viewRng = new PRNG(0xabc123);
 const worldRenderer = new WorldRenderer(el.world), predictWorldRenderer = new WorldRenderer(el.predictWorld), neuralRenderer = new NeuralRenderer(el.brain), chartRenderer = new ChartRenderer(el.chart), curiosityRenderer = new CuriosityRenderer(el.curiosityCanvas), memoryRenderer = new MemoryRenderer(el.memoryCanvas), historyRenderer = new HistoryRenderer(el.historyCanvas);
+installCanvasVisibilityObserver([el.world, el.brain, el.chart, el.predictWorld, el.curiosityCanvas, el.memoryCanvas, el.historyCanvas]);
 worldRenderer.overlayMode = el.worldFx?.value || 'BOTH';
 if (el.worldFxBadge && el.worldFx) el.worldFxBadge.textContent = el.worldFx.options[el.worldFx.selectedIndex]?.textContent?.toUpperCase() || 'ATTN + ECHO';
 const actionUi = ACTIONS.map(action => {
@@ -473,29 +497,41 @@ function frame(now) {
     : mode === 'OBSERVE'
       ? CONFIG.runtime.observeRenderHz
       : CONFIG.runtime.probeRenderHz;
-  captureMemoryState(now);
+  if (now - lastMemoryCaptureCheck >= 30) { lastMemoryCaptureCheck = now; captureMemoryState(now); }
   if (now - lastVisualRender >= 1000 / Math.max(1, renderHz)) {
     lastVisualRender = now;
-    const model = selectedViewModel();
-    const fx = cognitiveFx(model, lastSnapshot, viewWorld);
     if (activeObservatoryView === 'live') {
-      worldRenderer.overlayMode = el.worldFx?.value || 'BOTH';
-      worldRenderer.draw(viewWorld, mode + (paused ? ' • PAUSED' : ''), mode === 'LEARN' ? session.curiosityTrail : [], fx, now);
-      neuralRenderer.mode = el.brainView.value;
-      neuralRenderer.draw(model, lastSnapshot, fx, now);
-      updateDecision();
+      const worldOnscreen = canvasVisible(el.world), brainOnscreen = canvasVisible(el.brain);
+      if (worldOnscreen || brainOnscreen) {
+        const model = selectedViewModel();
+        const fx = cognitiveFx(model, lastSnapshot, viewWorld);
+        if (worldOnscreen) {
+          worldRenderer.overlayMode = el.worldFx?.value || 'BOTH';
+          worldRenderer.draw(viewWorld, mode + (paused ? ' • PAUSED' : ''), mode === 'LEARN' ? session.curiosityTrail : [], fx, now);
+        }
+        if (brainOnscreen) {
+          neuralRenderer.mode = el.brainView.value;
+          neuralRenderer.draw(model, lastSnapshot, fx, now);
+        }
+        updateDecision();
+      }
     } else if (activeObservatoryView === 'predict') {
-      predictWorldRenderer.overlayMode = el.worldFx?.value || 'BOTH';
-      predictWorldRenderer.draw(viewWorld, mode + (paused ? ' • PAUSED' : ''), mode === 'LEARN' ? session.curiosityTrail : [], fx, now);
-      if (el.predictWorldMeta) el.predictWorldMeta.textContent = `${el.worldFx?.options[el.worldFx.selectedIndex]?.textContent || 'Attention + Echo'} • ${mode} • visual only`;
-      if (el.curiosityCanvas.getBoundingClientRect().width > 1 && now - lastCuriosityRender >= 1000 / Math.max(1, CONFIG.runtime.curiosityRenderHz)) {
+      const predictWorldOnscreen = canvasVisible(el.predictWorld);
+      if (predictWorldOnscreen) {
+        const model = selectedViewModel();
+        const fx = cognitiveFx(model, lastSnapshot, viewWorld);
+        predictWorldRenderer.overlayMode = el.worldFx?.value || 'BOTH';
+        predictWorldRenderer.draw(viewWorld, mode + (paused ? ' • PAUSED' : ''), mode === 'LEARN' ? session.curiosityTrail : [], fx, now);
+        if (el.predictWorldMeta) el.predictWorldMeta.textContent = `${el.worldFx?.options[el.worldFx.selectedIndex]?.textContent || 'Attention + Echo'} • ${mode} • visual only`;
+      }
+      if (canvasVisible(el.curiosityCanvas) && now - lastCuriosityRender >= 1000 / Math.max(1, CONFIG.runtime.curiosityRenderHz)) {
         lastCuriosityRender = now;
         curiosityRenderer.draw(session.curiosity, session.lastCuriosity, now);
       }
-    } else if (activeObservatoryView === 'memory' && now - lastMemoryRender >= 80) {
+    } else if (activeObservatoryView === 'memory' && canvasVisible(el.memoryCanvas) && now - lastMemoryRender >= 80) {
       lastMemoryRender = now;
       memoryRenderer.draw(memoryPoints, now, { mode, steps: session.totalSteps });
-    } else if (activeObservatoryView === 'history' && now - lastHistoryRender >= 220) {
+    } else if (activeObservatoryView === 'history' && canvasVisible(el.historyCanvas) && now - lastHistoryRender >= 220) {
       lastHistoryRender = now;
       historyRenderer.draw(session, now);
       if (el.historyMeta) el.historyMeta.textContent = `${session.validationHistory?.length || 0} validations • ${session.lineageHistory?.length || 0} lineages • ${session.hallOfFame?.length || 0} Hall`;
@@ -652,7 +688,7 @@ function updateUI() {
   el.resultsCompactSummary.textContent = `learner ${lv ? pct(lv.validation.categoryScores?.balanced ?? lv.validation.score) : '—'} • Champion ${balancedBrain?.validation?.categoryScores ? pct(balancedBrain.validation.categoryScores.balanced) : '—'} • final holdout diagnostic only`;
 
   renderSkillRetention();
-  if (activeObservatoryView === 'live' && el.chart.getBoundingClientRect().width > 1) chartRenderer.draw(session.metrics);
+  if (activeObservatoryView === 'live' && canvasVisible(el.chart)) chartRenderer.draw(session.metrics);
   syncArchiveControls();
   lastUiDurationMs = performance.now() - uiStarted;
   el.uiMs.textContent = `${lastUiDurationMs.toFixed(1)} ms`;

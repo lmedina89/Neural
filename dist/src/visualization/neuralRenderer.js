@@ -12,6 +12,9 @@ export class NeuralRenderer {
     this.nodes = [];
     this.model = null;
     this.snapshot = null;
+    this.geometryKey = '';
+    this.geometry = null;
+    this.activeEdges = [];
   }
 
   resize() {
@@ -39,36 +42,37 @@ export class NeuralRenderer {
 
     const p = model.params, obs = snapshot.obs, hidden = snapshot.h, probs = snapshot.probs;
     const flow = this.mode === 'FLOW';
-    const inPts = layoutColumn(obs.length, w * .11, h);
-    const hidPts = flow ? layoutCognitiveCore(hidden.length, w, h) : layoutColumn(hidden.length, w * .52, h);
-    const outPts = layoutColumn(probs.length + 1, w * .89, h);
+    const geometryKey = `${this.mode}:${w.toFixed(2)}:${h.toFixed(2)}:${obs.length}:${hidden.length}:${probs.length}`;
+    if (this.geometryKey !== geometryKey || !this.geometry) {
+      this.geometryKey = geometryKey;
+      this.geometry = buildNeuralGeometry(obs.length, hidden.length, probs.length, w, h, flow);
+    }
+    const { inPts, hidPts, outPts, sensoryEdges, policyEdges, valueEdges, recurrentEdges } = this.geometry;
 
     if (flow) drawCognitiveHalo(c, w, h, probs, fx, now);
 
-    const edges = [];
-    for (let i = 0; i < hidden.length; i++) for (let j = 0; j < obs.length; j++) {
-      const weight = p.wx[i * obs.length + j];
-      edges.push(makeEdge(inPts[j], hidPts[i], weight, Math.abs(obs[j] * weight), 'sensory', i * 31 + j));
+    // Geometry is stable for a given canvas/layout. Reuse edge objects and only
+    // refresh real weights/activity each frame to avoid hundreds of short-lived
+    // allocations while preserving the exact same sorting and drawing paths.
+    const edges = this.activeEdges; edges.length = 0;
+    for (const edge of sensoryEdges) {
+      const weight = p.wx[edge.paramIndex]; edge.w = weight; edge.act = Math.abs(obs[edge.obsIndex] * weight); edges.push(edge);
     }
-    for (let a = 0; a < probs.length; a++) for (let i = 0; i < hidden.length; i++) {
-      const weight = p.wp[a * hidden.length + i];
-      edges.push(makeEdge(hidPts[i], outPts[a], weight, Math.abs(hidden[i] * weight), 'policy', a * 37 + i));
+    for (const edge of policyEdges) {
+      const weight = p.wp[edge.paramIndex]; edge.w = weight; edge.act = Math.abs(hidden[edge.hiddenIndex] * weight); edges.push(edge);
     }
-    const valuePoint = outPts.at(-1);
-    for (let i = 0; i < hidden.length; i++) {
-      const weight = p.wv[i];
-      edges.push(makeEdge(hidPts[i], valuePoint, weight, Math.abs(hidden[i] * weight), 'value', 700 + i));
+    for (const edge of valueEdges) {
+      const weight = p.wv[edge.hiddenIndex]; edge.w = weight; edge.act = Math.abs(hidden[edge.hiddenIndex] * weight); edges.push(edge);
     }
     if (flow && snapshot.hPrev && p.wh) {
-      for (let i = 0; i < hidden.length; i++) for (let j = 0; j < hidden.length; j++) {
-        if (i === j) continue;
-        const weight = p.wh[i * hidden.length + j];
-        const activity = Math.abs(snapshot.hPrev[j] * weight);
+      for (const edge of recurrentEdges) {
+        const weight = p.wh[edge.paramIndex], activity = Math.abs(snapshot.hPrev[edge.sourceHiddenIndex] * weight);
         if (activity < 0.012) continue;
-        edges.push(makeRecurrentEdge(hidPts[j], hidPts[i], weight, activity, i * 97 + j));
+        edge.w = weight; edge.act = activity; edges.push(edge);
       }
     }
 
+    const valuePoint = outPts.at(-1);
     edges.sort((a, b) => (this.mode === 'WEIGHTS' ? Math.abs(b.w) - Math.abs(a.w) : b.act - a.act));
     const maxEdges = this.mode === 'STRONGEST' ? 120 : flow ? Math.min(285, edges.length) : Math.min(330, edges.length);
     c.lineCap = 'round';
@@ -168,6 +172,32 @@ function layoutCognitiveCore(n, w, h) {
     });
   }
   return pts;
+}
+
+function buildNeuralGeometry(obsN, hiddenN, probsN, w, h, flow) {
+  const inPts = layoutColumn(obsN, w * .11, h);
+  const hidPts = flow ? layoutCognitiveCore(hiddenN, w, h) : layoutColumn(hiddenN, w * .52, h);
+  const outPts = layoutColumn(probsN + 1, w * .89, h);
+  const sensoryEdges = [], policyEdges = [], valueEdges = [], recurrentEdges = [];
+  for (let i = 0; i < hiddenN; i++) for (let j = 0; j < obsN; j++) {
+    const edge = makeEdge(inPts[j], hidPts[i], 0, 0, 'sensory', i * 31 + j);
+    edge.paramIndex = i * obsN + j; edge.obsIndex = j; sensoryEdges.push(edge);
+  }
+  for (let a = 0; a < probsN; a++) for (let i = 0; i < hiddenN; i++) {
+    const edge = makeEdge(hidPts[i], outPts[a], 0, 0, 'policy', a * 37 + i);
+    edge.paramIndex = a * hiddenN + i; edge.hiddenIndex = i; policyEdges.push(edge);
+  }
+  const valuePoint = outPts.at(-1);
+  for (let i = 0; i < hiddenN; i++) {
+    const edge = makeEdge(hidPts[i], valuePoint, 0, 0, 'value', 700 + i);
+    edge.hiddenIndex = i; valueEdges.push(edge);
+  }
+  if (flow) for (let i = 0; i < hiddenN; i++) for (let j = 0; j < hiddenN; j++) {
+    if (i === j) continue;
+    const edge = makeRecurrentEdge(hidPts[j], hidPts[i], 0, 0, i * 97 + j);
+    edge.paramIndex = i * hiddenN + j; edge.sourceHiddenIndex = j; recurrentEdges.push(edge);
+  }
+  return { inPts, hidPts, outPts, sensoryEdges, policyEdges, valueEdges, recurrentEdges };
 }
 
 function makeEdge(a, b, w, act, kind, phase) {

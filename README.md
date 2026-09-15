@@ -1,85 +1,36 @@
-# MicroMind v0.1.4.0 — Cognitive Observatory
+# MicroMind v0.1.4.0.1 — Mobile Visualization Performance Hotfix
 
-**Build:** `COGOBS-0140`  
-**Parent:** v0.1.3.4 `PREDATTN-0134`  
-**Save schema:** 9 (unchanged)
+**Build:** `VISPERF-01401`  
+**Parent:** v0.1.4.0 `COGOBS-0140`
 
-MicroMind v0.1.4.0 is a visualization/navigation milestone. It does **not** change how the agent learns. The policy, PPO implementation, curiosity learner, curriculum, world physics, evaluator, checkpoint system, Champion/Hall behavior, and PRNG are preserved from v0.1.3.4.
+This is a rendering-performance hotfix for the Cognitive Observatory. It does **not** change how MicroMind learns or what the existing visualizations look like while they are on screen.
 
 ## What changed
 
-### Five-view Cognitive Observatory
-The long single-page laboratory is split into compact views:
+- Heavy canvases now use viewport visibility tracking. When a canvas is scrolled fully off-screen, it keeps its last rendered frame but stops consuming repeated draw work until it comes back into view.
+- LIVE world and Cognitive Flow are gated independently, so scrolling to the Training card no longer keeps both large canvases repainting in the background.
+- Predict World, curiosity network, Memory Constellation, History, and the return chart receive the same off-screen sleep behavior.
+- Cognitive Flow caches its stable node/curve geometry and reuses edge objects. Each visible frame still refreshes the **real current weights and activations**, sorts them the same way, and draws the same visual paths/effects.
+- Expensive cognitive-FX preparation is skipped entirely when the active visual canvases are off-screen.
 
-- **LIVE** — World, Cognitive Flow brain, training metrics, decisions.
-- **PREDICT** — Prediction Echo/Attention stage plus curiosity predictor diagnostics.
-- **MEMORY** — real recurrent-state Memory Constellation.
-- **HISTORY** — Learning Timeline plus Brain Lineage map.
-- **RESEARCH** — PPO stability, retention, evaluation, save/research details.
+## Deliberately unchanged
 
-Only the active heavy canvas view is rendered. This keeps the page shorter and avoids animating hidden canvases on mobile.
+- policy architecture and parameters
+- PPO implementation and hyperparameters
+- curiosity predictor/reward behavior
+- world physics and rewards
+- curriculum/rehearsal
+- validation and Champion/Hall rules
+- save schema (`9`)
+- render-rate settings and visual effect settings
+- Cognitive Observatory layout, colors, glow, connection count, halo, attention field, prediction echo, Memory Constellation and History appearance
 
-### Memory Constellation
-The active policy's real 24-value recurrent hidden state is sampled into a bounded **320-point runtime ring buffer**. A fixed deterministic projection maps those states into a 2D state-space view; similar internal states tend to occupy nearby regions without training another model or consuming RNG state.
+## iPhone test
 
-The constellation shows:
+1. Load the real Manual Save and verify lineage / Champion / step count.
+2. In LIVE, leave World + Cognitive Flow visible and note FPS/throughput. Visual appearance should match v0.1.4.0.
+3. Scroll down until both large canvases are fully off-screen while remaining in LIVE. Training throughput should recover because their drawing and cognitive-FX preparation are asleep.
+4. Scroll back up. Rendering should resume automatically with no button press and no visual downgrade.
+5. Repeat with PREDICT / MEMORY / HISTORY. Only the visible active canvas should perform heavy drawing.
 
-- recent recurrent-state trajectory,
-- activation/activity intensity,
-- action-colored state points,
-- current-state halo,
-- real novelty/reward/danger events,
-- **Experience Ripples** emitted by those events.
-
-The runtime constellation intentionally is **not added to checkpoint schema 9**. It is observational telemetry for the current browser session and resets on reload or lineage replacement. That keeps existing saves byte-compatible and prevents visualization history from bloating checkpoints.
-
-### Learning Timeline + Brain Lineage
-The History view reconstructs the agent's training story from data already saved by MicroMind:
-
-- validation history,
-- current balanced score,
-- Champion archive positions,
-- Hall-of-Fame entries,
-- learner lineage history,
-- frozen branches / A/B descendants.
-
-Tapping a timeline or lineage node shows its step, score (when available), and lineage information. The renderer is read-only.
-
-## Safety / scientific constraints
-
-v0.1.4.0 does **not** modify:
-
-- 1,040-parameter recurrent actor-critic architecture,
-- 441-parameter curiosity predictor architecture,
-- PPO clip / learning rate / gradient guard,
-- curiosity reward scale or 0.25 episode budget,
-- continual rehearsal mix,
-- validation protocol or Champion promotion rules,
-- save schema (still 9),
-- autonomous learner weights through any visualization action.
-
-The AI/simulation/evaluation/storage source files are byte-for-byte identical to v0.1.3.4. Only release identity plus app/visualization/UI files changed.
-
-## QA
-
-- `npm test`: **77/77 pass**
-- `npm run check`: pass
-- `npm run benchmark`: pass
-- `npm run performance`: pass
-- exact deterministic continuation parity against v0.1.3.4 after 3,840 training steps: **policy, optimizer, curiosity predictor, curriculum, rehearsal state all identical**
-- protected AI/sim/evaluation/storage/PRNG source hash parity against v0.1.3.4: **all exact**
-- JS syntax check: pass
-- root/dist key-file parity: pass
-
-## Recommended physical iPhone test
-
-1. Deploy the repo-root ZIP.
-2. Verify `v0.1.4.0 • COGOBS-0140`.
-3. **Load the real Manual Save** before training if a disposable visual-test brain is currently active.
-4. Verify learner lineage, Champion, Hall, and step count.
-5. Tap through LIVE → PREDICT → MEMORY → HISTORY → RESEARCH.
-6. Let LEARN run with MEMORY visible for 30–60 seconds and confirm the constellation fills, trails move, and occasional real event ripples appear.
-7. Open HISTORY and confirm validation/Champion/branch nodes reflect the loaded save.
-8. Return to LIVE and compare training throughput with heavy views hidden.
-
-The next scientific milestone remains validation-confidence work; v0.1.4.0 deliberately does not attempt to fix the learning instability yet.
+The scientific roadmap remains v0.1.4.1 Validation Confidence & True Regression Audit after this hotfix.

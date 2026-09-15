@@ -14,7 +14,7 @@ import { evaluateCurriculumSuite, evaluateFullRetentionSuite, evaluateHeldoutGen
 import { projectHiddenState } from '../src/visualization/memoryRenderer.js';
 import { buildHistoryScene } from '../src/visualization/historyRenderer.js';
 
-test('release identity is v0.1.4.0 Cognitive Observatory',()=>{assert.equal(VERSION,'0.1.4.0');assert.equal(BUILD_MARKER,'COGOBS-0140')});
+test('release identity is v0.1.4.0.1 Visualization Performance Hotfix',()=>{assert.equal(VERSION,'0.1.4.0.1');assert.equal(BUILD_MARKER,'VISPERF-01401')});
 test('PRNG is repeatable',()=>{const a=new PRNG(123),b=new PRNG(123);for(let i=0;i<100;i++)assert.equal(a.nextUint(),b.nextUint())});
 test('training, validation, comparison, curiosity-audit and final-holdout seed domains are separated',()=>{const domains=['train',CONFIG.validation.seedBase,CONFIG.generalization.compareSeedBase,CONFIG.curiosityAudit.seedBase,CONFIG.generalization.seedBase];const seeds=domains.map(x=>domainSeed(x,0));assert.equal(new Set(seeds).size,seeds.length)});
 test('world generation is deterministic',()=>{const a=new World(77,CURRICULUM[2]),b=new World(77,CURRICULUM[2]);assert.deepEqual(a.food,b.food);assert.deepEqual(a.hazards,b.hazards);assert.deepEqual(a.walls,b.walls);assert.deepEqual(Array.from(a.observe()),Array.from(b.observe()))});
@@ -44,7 +44,7 @@ test('schema-2 save migration preserves old protected best and schedules immedia
 test('schema-1 long-run migration snapshots exact loaded brain and does not backfill fake milestones',()=>{const a=new TrainingSession({seed:44,envCount:2,autoCurriculum:false});const snap=a.snapshot();const steps=2_122_848;const legacy={schema:1,seed:snap.seed,totalSteps:steps,totalEpisodes:3000,envSeedCursor:snap.envSeedCursor,curriculum:{stage:2,history:[]},model:snap.model,optimizer:snap.optimizer,metrics:[],milestones:snap.milestones};const b=new TrainingSession({seed:45,envCount:2,autoCurriculum:false});b.restore(legacy);assert.equal(b.nextMilestoneStep,2_250_000);assert.ok(b.milestones.has(steps));assert.equal(b.milestones.has(1_250_000),false);assert.equal(b.nextValidationStep,b.totalSteps)});
 
 test('reward is decomposed into finite named components',()=>{const w=new World(12345,CURRICULUM[1]);const r=w.step(1);const parts=r.info.rewardParts;for(const k of ['survival','energy','wall','food','hazard','approach','death'])assert.ok(Number.isFinite(parts[k]),k)});
-test('v0.1.4.0 UI preserves Hall, branching, performance, lineage, rehearsal and curiosity-audit diagnostics',async()=>{const html=await readFile(new URL('../index.html',import.meta.url),'utf8');for(const id of ['brainSource','hallBrainOptions','bestOption','overallOption','foragerOption','survivorOption','efficiencyOption','pinChampionBtn','restoreBestBtn','branchSelect','switchBranchBtn','researchLineageVal','policyOriginVal','hallVal','branchesVal','hallList','skillRetention','lrVal','klVal','epochsVal','retentionAlert','lineageVal','rehearsalVal','promotionVal','simSpeedVal','ppoMsVal','fpsVal','uiMsVal','validationMsVal','storageMsVal','curiosityInfluenceVal','curiosityAppliedVal','curiosityShareVal','curiosityResetsVal','curiosityBudgetUseVal','curiosityExhaustVal','curiosityModeSelect','startCuriosityAuditBtn','switchCuriosityAuditBtn','endCuriosityAuditBtn','curiosityAuditResults'])assert.match(html,new RegExp(`id="${id}"`));assert.match(html,/v0\.1\.4\.0/);assert.match(html,/Fork New Learner/);assert.match(html,/Hall of Fame/);assert.match(html,/Adaptive/);assert.match(html,/observational only/);assert.match(html,/final holdout only diagnoses/)});
+test('v0.1.4.0.1 UI preserves Hall, branching, performance, lineage, rehearsal and curiosity-audit diagnostics',async()=>{const html=await readFile(new URL('../index.html',import.meta.url),'utf8');for(const id of ['brainSource','hallBrainOptions','bestOption','overallOption','foragerOption','survivorOption','efficiencyOption','pinChampionBtn','restoreBestBtn','branchSelect','switchBranchBtn','researchLineageVal','policyOriginVal','hallVal','branchesVal','hallList','skillRetention','lrVal','klVal','epochsVal','retentionAlert','lineageVal','rehearsalVal','promotionVal','simSpeedVal','ppoMsVal','fpsVal','uiMsVal','validationMsVal','storageMsVal','curiosityInfluenceVal','curiosityAppliedVal','curiosityShareVal','curiosityResetsVal','curiosityBudgetUseVal','curiosityExhaustVal','curiosityModeSelect','startCuriosityAuditBtn','switchCuriosityAuditBtn','endCuriosityAuditBtn','curiosityAuditResults'])assert.match(html,new RegExp(`id="${id}"`));assert.match(html,/v0\.1\.4\.0\.1/);assert.match(html,/Fork New Learner/);assert.match(html,/Hall of Fame/);assert.match(html,/Adaptive/);assert.match(html,/observational only/);assert.match(html,/final holdout only diagnoses/)});
 
 test('skill-regression evidence is watch-first and confirmed only on repeat',()=>{const stages=[{stage:0,name:'Motor Nursery',skillScore:.33,skillCiLow:.25,skillCiHigh:.41}];const best=[{stage:0,name:'Motor Nursery',score:.74,ciLow:.66,ciHigh:.82,atSteps:1000},null,null,null];const a=assessSkillRetention(stages,best,[0,0,0,0]);assert.equal(a.alerts.length,1);assert.equal(a.alerts[0].severity,'catastrophic');assert.equal(a.alerts[0].confirmed,false);const b=assessSkillRetention(stages,best,a.streaks);assert.equal(b.alerts[0].confirmed,true);assert.equal(b.alerts[0].streak,2)});
 test('final held-out generalization suite is all-skills and isolated from validation',()=>{const m=new RecurrentActorCritic(77);const r=evaluateHeldoutGeneralizationSuite(m,{episodesPerStage:2,seedBase:'heldout:final:test'});assert.equal(r.stageResults.length,CURRICULUM.length);assert.equal(r.episodes,2*CURRICULUM.length);assert.match(r.protocol,/heldout-generalization-v2/);assert.doesNotMatch(r.protocol,/validation:v3/)});
@@ -514,7 +514,7 @@ test('Prediction Echo and Attention Fields are real-data overlays with compact w
   assert.match(css,/worldHeadControls/);
 });
 
-test('v0.1.4.0 remains visual-only and keeps the accepted learning constants and schema',async()=>{
+test('v0.1.4.0.1 remains visual-only and keeps the accepted learning constants and schema',async()=>{
   const config=await readFile(new URL('../src/config.js',import.meta.url),'utf8');
   const session=await readFile(new URL('../src/ai/session.js',import.meta.url),'utf8');
   assert.match(config,/obsSize: 10/);assert.match(config,/hiddenSize: 24/);assert.match(config,/actionSize: 7/);
@@ -573,4 +573,32 @@ test('Cognitive Observatory memory and history renderers use real recurrent/hist
   assert.match(history,/frozenLearners/);
   assert.match(main,/MEMORY_MAX_POINTS = 320/);
   assert.match(main,/session\.hidden\?\.\[0\]/);
+});
+
+
+test('v0.1.4.0.1 sleeps expensive canvases when they are off-screen without lowering visual render rates',async()=>{
+  const main=await readFile(new URL('../src/app/main.js',import.meta.url),'utf8');
+  const config=await readFile(new URL('../src/config.js',import.meta.url),'utf8');
+  assert.match(main,/IntersectionObserver/);
+  assert.match(main,/canvasVisible\(el\.world\)/);
+  assert.match(main,/canvasVisible\(el\.brain\)/);
+  assert.match(main,/canvasVisible\(el\.predictWorld\)/);
+  assert.match(main,/canvasVisible\(el\.curiosityCanvas\)/);
+  assert.match(main,/canvasVisible\(el\.memoryCanvas\)/);
+  assert.match(main,/canvasVisible\(el\.historyCanvas\)/);
+  assert.match(main,/canvasVisible\(el\.chart\)/);
+  assert.match(config,/learnRenderHz: 12/);
+  assert.match(config,/observeRenderHz: 30/);
+  assert.match(config,/probeRenderHz: 20/);
+  assert.match(config,/curiosityRenderHz: 8/);
+});
+
+test('Cognitive Flow reuses geometry objects while refreshing live weights and activations',async()=>{
+  const neural=await readFile(new URL('../src/visualization/neuralRenderer.js',import.meta.url),'utf8');
+  assert.match(neural,/buildNeuralGeometry/);
+  assert.match(neural,/this\.activeEdges/);
+  assert.match(neural,/edge\.w = weight/);
+  assert.match(neural,/edge\.act = Math\.abs/);
+  assert.match(neural,/activity < 0\.012/);
+  assert.match(neural,/edges\.sort/);
 });

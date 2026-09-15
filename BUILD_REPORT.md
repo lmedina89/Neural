@@ -1,120 +1,36 @@
-# MicroMind v0.1.4.0 — Build Report
+# MicroMind v0.1.4.0.1 — Build Report
 
-**Version:** `0.1.4.0`  
-**Build marker:** `COGOBS-0140`  
-**Parent:** v0.1.3.4 `PREDATTN-0134`  
-**Checkpoint schema:** 9 (unchanged)
+**Version:** `0.1.4.0.1`  
+**Build marker:** `VISPERF-01401`  
+**Parent baseline:** v0.1.4.0 `COGOBS-0140`
 
 ## Objective
 
-Turn MicroMind from an increasingly long research page into a compact interactive AI observatory while adding two new, real-data visual systems: **Memory Constellation** and **Learning Timeline / Brain Lineage**. Preserve all learning behavior exactly.
+Recover mobile training throughput lost to the richer Cognitive Observatory visuals without reducing visual fidelity or changing learning behavior.
 
 ## Implementation
 
-### 1. Observatory navigation
-Added a sticky five-view navigator:
+1. Added IntersectionObserver-backed viewport visibility tracking for all expensive observatory canvases.
+2. LIVE World and Cognitive Flow now sleep independently when scrolled off-screen.
+3. Predict World, Curiosity, Memory, History, and the return chart also sleep when off-screen.
+4. Cognitive-FX computation is deferred until a visible canvas actually needs it.
+5. Cognitive Flow now reuses stable node/curve geometry and edge objects, while refreshing real weights/activations every visible frame.
+6. No render-rate, connection-count, glow, canvas-resolution, or visual-style reductions were made.
 
-- LIVE
-- PREDICT
-- MEMORY
-- HISTORY
-- RESEARCH
+## Learning safety
 
-The existing controls/save slots remain globally available. Secondary research panels now appear only in RESEARCH. Prediction/curiosity content appears only in PREDICT. Heavy canvases are drawn only for the active observatory view.
+The learning modules are intended to remain identical to v0.1.4.0. Save schema remains 9. Final parity and test results are recorded below after verification.
 
-### 2. Prediction view
-Added a dedicated `predictWorldCanvas` using the existing read-only `WorldRenderer`. It shows the same real Prediction Echo / Attention Field telemetry without requiring the full LIVE layout to remain visible. The curiosity predictor panel remains available directly below it.
+## Verification
 
-### 3. Memory Constellation
-Added `src/visualization/memoryRenderer.js`.
+- Unit/integration suite: **79/79 passed**.
+- Deterministic learning parity: v0.1.4.0 and v0.1.4.0.1 were trained from the same seed for **3,840 steps**; policy weights, PPO optimizer state, curiosity predictor, curriculum state, rehearsal history, global steps/episodes and learner experience were exactly equal.
+- Protected learning modules are byte-for-byte identical to v0.1.4.0: `model.js`, `ppo.js`, `rollout.js`, `session.js`, `curiosity.js`, `world.js`, `curriculum.js`, `evaluator.js`, `checkpoints.js`, and `prng.js`.
+- `CONFIG` learning/runtime body is unchanged after the version/build identity lines.
+- `styles.css` is byte-for-byte identical to v0.1.4.0, so the hotfix introduces no CSS/visual-style downgrade.
+- Build completed successfully.
+- Development performance smoke remained healthy; latest core profile reported about **73.6k simulation steps/sec** for the simulation phase and **25.9k training steps/sec** inside the Node performance harness. This harness does not render Safari canvases; the real-device win being targeted is specifically removal of off-screen rendering work.
 
-Data source:
-- `session.hidden[0]` while LEARN is active,
-- the real observation-world recurrent state while OBSERVE/PROBE is active.
+## Expected physical-device behavior
 
-Projection:
-- fixed deterministic 2-axis projection of the 24 recurrent hidden units,
-- no trainable parameters,
-- no RNG calls,
-- no learning-state mutation.
-
-Bounded storage:
-- 320 runtime points maximum,
-- sampled at a low visual cadence,
-- resets on lineage replacement/reload,
-- intentionally not stored in checkpoint schema 9.
-
-Visual encodings:
-- state-space point = real recurrent hidden state,
-- trail = temporal path through those states,
-- point glow = recent/activity/novelty information,
-- current halo = newest sampled state,
-- Experience Ripple = real novelty, food/reward, danger/death, or episode boundary event.
-
-### 4. Learning Timeline + Brain Lineage
-Added `src/visualization/historyRenderer.js`.
-
-The renderer reconstructs history from existing persisted state only:
-- `validationHistory`,
-- `bestArchive`,
-- `hallOfFame`,
-- `lineageHistory`,
-- `frozenLearners`,
-- current learner metadata.
-
-The upper timeline plots validation score movement plus Champion/Hall milestones. The lower graph maps lineage/branch nodes and parent links when available. Tap inspection is read-only.
-
-### 5. Mobile/UI constraints
-- five-view nav is horizontally scrollable on narrow iPhones,
-- existing 16px mobile form-control protection remains,
-- Memory/History canvases have bounded portrait heights,
-- hidden observatory sections use `display:none!important`,
-- no hidden heavy canvas animation.
-
-## Learning-state protection
-
-Before editing, hashes were captured for:
-
-- `src/ai/*.js`
-- `src/sim/*.js`
-- `src/evaluation/*.js`
-- `src/storage/*.js`
-- `src/utils/*.js`
-
-After the build, every protected file matched the v0.1.3.4 hash exactly.
-
-A separate deterministic parity run instantiated v0.1.3.4 and v0.1.4.0 with the same seed and trained both for 3,840 steps. Exact equality was verified for:
-
-- policy parameters,
-- PPO optimizer state,
-- curiosity predictor state,
-- curriculum state,
-- rehearsal history,
-- total steps/episodes.
-
-Result: **exact parity**.
-
-## QA results
-
-- tests: **77/77 pass**
-- build: pass
-- benchmark: pass
-- performance smoke: pass (~22k wall-clock steps/sec in the Node smoke run; browser/iPhone rendering still requires physical testing)
-- all source JS syntax: pass
-- generated `dist/` contains both new renderers
-- root and dist `index.html`, `styles.css`, and `src/app/main.js`: identical after build
-
-## Acceptance notes
-
-This build is intentionally observational. It does not resolve the validation-noise / continual-learning-stability question. The next science-focused milestone should use the v0.1.3.2 observatory evidence to improve confidence in whether apparent skill drops are true regressions or noisy estimates.
-
-## Physical test focus
-
-On iPhone Safari, verify:
-
-1. navigation does not zoom/overflow,
-2. LIVE and PREDICT preserve the existing visuals,
-3. MEMORY fills without heat/FPS becoming unreasonable,
-4. Experience Ripples occur but do not become continuous decorative noise,
-5. HISTORY reflects the loaded real save/lineage,
-6. returning to LIVE restores normal training throughput.
+The largest improvement should occur when LIVE remains selected but the World / Cognitive Flow canvases have been scrolled completely out of view (for example, while reading Training, PPO Stability, or lower cards). Those canvases now stop repainting and cognitive-FX preparation is skipped until they re-enter the viewport. When visible, the same render-rate settings, connection counts, glow effects, Cognitive Halo, Attention/Echo effects and canvas resolution remain in use.
