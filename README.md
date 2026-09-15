@@ -1,62 +1,80 @@
-# MicroMind v0.1.3.1 — Curiosity Audit & Ablation
+# MicroMind v0.1.3.2 — Continual Learning Stability Observatory
 
-MicroMind is a browser-based miniature AI research lab. A real **1,040-parameter recurrent actor-critic** learns with PPO in procedural worlds while its activations, decisions, memory, rewards, rehearsal, Champions, and generalization are inspectable.
+MicroMind is a browser-based miniature AI research lab. A real **1,040-parameter recurrent actor-critic** learns with PPO in procedural worlds while its activations, decisions, memory, rewards, rehearsal, Champions, curiosity predictor, and generalization are inspectable.
 
-v0.1.3.1 does **not** add another intelligence feature. It turns the v0.1.3 curiosity layer into a controlled experiment so we can determine whether the intrinsic reward actually helps the policy.
+**Build:** `STABOBS-0132`
 
-**Build:** `CURAUD-0131`
+v0.1.3.2 follows the completed v0.1.3.1 Curiosity A/B audit. The matched Control and Curiosity descendants both showed substantial checkpoint volatility and finished the 2M-step audit with no material final difference. The next scientific question is therefore **why the continual PPO learner sometimes drops and later recovers**, not whether curiosity merely exists.
 
-## What stays fixed
+## Scientific rule for this release
 
-The v0.1.3 learning problem remains the control:
+This is an **observatory**, not a learning retune.
 
-- policy architecture: **1,040 parameters**;
-- curiosity forward predictor: **441 parameters**;
-- PPO math/hyperparameters and external rewards unchanged;
-- observations/actions, physics, world generation, and rehearsal targets unchanged;
-- protected Champion/Hall archive unchanged;
-- validation, historical comparison, and final unseen evaluation remain curiosity-free.
+The following stay unchanged from v0.1.3.1:
 
-## New: Observe-only curiosity
+- 1,040-parameter recurrent policy;
+- 441-parameter curiosity predictor;
+- PPO hyperparameters and optimizer behavior;
+- curiosity reward strength and episode cap;
+- external rewards, observations, actions, physics, and world generation;
+- curriculum/rehearsal targets;
+- Champion/Hall promotion logic;
+- validation, comparison, and final-heldout seed domains.
 
-Curiosity can now run in two influence modes:
+The new code only measures the existing update more deeply and records large validation regressions.
 
-- **Reward ON** — v0.1.3 behavior: the predictor learns and its bounded intrinsic bonus is added to PPO training reward.
-- **Observe only (reward 0)** — the predictor still learns, measures prediction error/novelty, and performs shadow budget accounting, but PPO receives **exactly zero** intrinsic reward.
+## PPO Stability Observatory
 
-This separates “the predictor works” from “the predictor improves behavior.”
+Each PPO update now reports real telemetry that was already implicit in the optimizer but was not visible:
 
-## New: matched A/B audit
+- policy loss and value loss;
+- entropy and approximate/max KL;
+- PPO objective clip fraction;
+- raw advantage mean and standard deviation;
+- critic explained variance using rollout-time value predictions;
+- gradient L2 norm and fraction of minibatches requiring gradient clipping;
+- absolute and relative policy-parameter movement per PPO update;
+- maximum single-parameter movement;
+- rejected hard-KL update count.
 
-**Start Curiosity A/B Audit** freezes the exact current Learner as a recoverable origin and creates two descendants from the same policy weights, optimizer state, curiosity predictor, RNG state, curriculum state, and environment-seed cursor:
+Telemetry capture is downsampled every **50,000 global steps** so it remains useful over multi-million-step physical runs without ballooning the save.
 
-- **CONTROL** — curiosity predictor learns, intrinsic reward influence = 0;
-- **CURIOSITY** — current v0.1.3 intrinsic reward behavior.
+## Regression event recorder
 
-The audit freezes automatic curriculum movement, uses a separate read-only seed domain (`heldout:curiosity-ablation:v1`), evaluates every **500,000 branch-local steps**, and targets **2,000,000 steps per branch** by default.
+At each ordinary validation, MicroMind compares the new result with the previous validation from the same active lineage.
 
-For experimental fairness, both branches use the same PPO schedule age at equal branch-local progress. Ordinary milestone saves and Champion promotion are suspended during the audit. **No A/B winner is automatically promoted or restored.**
+A compact diagnostic event is preserved when either:
 
-## Curiosity accounting
+- balanced validation drops by at least **10 percentage points**, or
+- any individual skill drops by at least **15 percentage points**.
 
-The panel now exposes:
+The event records the validation deltas plus the immediately preceding PPO telemetry window, curriculum, rehearsal mix, and curiosity influence mode. This is **observational only**. It never rolls back, changes learning rate, restores a Champion, or modifies the learner.
 
-- potential curiosity bonus;
-- applied curiosity bonus;
-- curiosity share of reward magnitude;
-- predictor error/loss and novelty;
-- budget reset count;
-- mean budget use per completed episode;
-- budget-exhaustion rate and approximate exhaustion point;
-- matched Control/Curiosity progress and paired evaluation results.
+## Compact phone UI
 
-Important correction from v0.1.3 UI wording: **`0.250 / 0.25` is budget remaining, not budget consumed.** A full `0.250` therefore means the episode has not spent its curiosity allowance yet. v0.1.3.1 labels this explicitly as **BUDGET REMAINING**.
+The research page had become too vertically long on iPhone. v0.1.3.2 converts secondary research areas into collapsible panels with useful one-line summaries:
+
+- Research Status;
+- PPO Stability;
+- Curiosity / Prediction and its completed A/B audit;
+- Skill Retention;
+- Evaluation / Checkpoints.
+
+The World, Live Brain, Training, and Decision panels remain immediately visible. The curiosity canvas is not redrawn while its panel is collapsed, reducing unnecessary UI work.
+
+Mobile form controls use a minimum **16 px** font size to avoid iOS Safari's focus-zoom behavior, and research panels are width-contained to prevent horizontal viewport expansion.
 
 ## Persistence
 
-v0.1.3.1 uses **checkpoint schema 8** and loads schemas 1–8. Schema 7 v0.1.3 saves migrate with curiosity reward ON and no active audit. Active A/B state, branch progress, branch-specific episode windows, predictor state, and reward-influence mode survive schema-8 save/reload.
+v0.1.3.2 uses **checkpoint schema 9** and loads schemas 1–9. Schema 8 v0.1.3.1 saves migrate directly with empty stability history and immediately begin collecting telemetry. No policy, optimizer, Champion, Hall, branch, curiosity, or A/B result is discarded by the migration.
 
-## Run
+Stability history and regression events are also kept with frozen learner branches so later branch inspection does not mix telemetry from unrelated lineages.
+
+## Verification
+
+The release test suite includes policy/optimizer parity checks at development time. For a fixed seed and identical training sequence, the v0.1.3.2 instrumented build produced byte-identical policy weights, optimizer state (excluding the deliberately expanded diagnostic `lastStats` object), curiosity predictor state, curriculum state, and step count versus v0.1.3.1.
+
+Run locally with:
 
 ```bash
 npm test
@@ -65,6 +83,4 @@ npm run build
 python3 -m http.server 8080 --directory dist
 ```
 
-Then open `http://localhost:8080/`.
-
-GitHub Pages can also serve the repository root directly.
+GitHub Pages can serve the repository root directly.

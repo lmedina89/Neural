@@ -65,6 +65,9 @@ export class TrainingSession {
     this.auditRole = null;
     this.lastCuriosity = null;
     this.curiosityTrail = [];
+    this.stabilityHistory = [];
+    this.stabilityEvents = [];
+    this.nextStabilityCaptureStep = CONFIG.stability.captureIntervalSteps;
     for (let i = 0; i < envCount; i++) this.addEnv(i);
     this.saveMilestone(0);
   }
@@ -360,8 +363,153 @@ export class TrainingSession {
     };
     this.metrics.push(metric);
     if (this.metrics.length > CONFIG.runtime.chartPoints) this.metrics.shift();
+    this.recordStabilityPoint(metric);
     const auditBranchComplete = Boolean(this.curiosityAudit?.active && this.auditRole && this.auditBranchProgress(this.auditRole) >= this.curiosityAudit.targetStepsPerBranch);
     return { metric, completed, transitions: transitions.length, validation, curriculumEvent, auditEvaluation, auditBranchComplete };
+  }
+
+  recordStabilityPoint(metric = null) {
+    if (this.totalSteps < this.nextStabilityCaptureStep) return null;
+    const stats = metric || this.trainer.lastStats || {};
+    const point = {
+      steps: this.totalSteps,
+      episodes: this.totalEpisodes,
+      lineageId: this.learnerLineage?.id || null,
+      curriculum: this.curriculum.stage,
+      policyLoss: finiteOrNull(stats.policyLoss),
+      valueLoss: finiteOrNull(stats.valueLoss),
+      entropy: finiteOrNull(stats.entropy),
+      approxKL: finiteOrNull(stats.approxKL),
+      maxEpochKL: finiteOrNull(stats.maxEpochKL),
+      clipFraction: finiteOrNull(stats.clipFraction),
+      advantageMean: finiteOrNull(stats.advantageMean),
+      advantageStd: finiteOrNull(stats.advantageStd),
+      explainedVariance: finiteOrNull(stats.explainedVariance),
+      gradientNormMean: finiteOrNull(stats.gradientNormMean),
+      gradientNormMax: finiteOrNull(stats.gradientNormMax),
+      gradientClipFraction: finiteOrNull(stats.gradientClipFraction),
+      parameterDeltaL2: finiteOrNull(stats.parameterDeltaL2),
+      parameterRelativeDelta: finiteOrNull(stats.parameterRelativeDelta),
+      parameterMaxAbsDelta: finiteOrNull(stats.parameterMaxAbsDelta),
+      learningRate: finiteOrNull(stats.learningRate),
+      epochsRun: finiteOrNull(stats.epochsRun),
+      earlyStopped: Boolean(stats.earlyStopped),
+      updateRejected: Boolean(stats.updateRejected),
+      rejectedUpdates: Math.max(0, Number(stats.rejectedUpdates) || 0),
+    };
+    this.stabilityHistory.push(point);
+    if (this.stabilityHistory.length > CONFIG.stability.historyPoints) this.stabilityHistory.shift();
+    const interval = Math.max(1, CONFIG.stability.captureIntervalSteps);
+    this.nextStabilityCaptureStep = (Math.floor(this.totalSteps / interval) + 1) * interval;
+    return point;
+  }
+
+  stabilitySummary() {
+    const stats = this.trainer.lastStats || {};
+    const recent = this.stabilityHistory.slice(-Math.max(1, CONFIG.stability.spikeWindow));
+    const deltaBaseline = medianFinite(recent.slice(0, -1).map(x => x.parameterRelativeDelta));
+    const valueBaseline = medianFinite(recent.slice(0, -1).map(x => x.valueLoss));
+    const relativeDelta = Number(stats.parameterRelativeDelta);
+    const valueLoss = Number(stats.valueLoss);
+    const reasons = [];
+    let status = 'STABLE';
+    if (stats.updateRejected) {
+      status = 'GUARD';
+      reasons.push('hard-KL update rejected');
+    } else {
+      const enoughHistory = recent.length >= 8;
+      const deltaSpike = enoughHistory && Number.isFinite(relativeDelta) && Number.isFinite(deltaBaseline)
+        && relativeDelta > Math.max(1e-12, deltaBaseline * CONFIG.stability.spikeMultiplier);
+      const valueSpike = enoughHistory && Number.isFinite(valueLoss) && Number.isFinite(valueBaseline)
+        && valueLoss > Math.max(1e-9, valueBaseline * CONFIG.stability.spikeMultiplier);
+      if (deltaSpike || valueSpike) {
+        status = 'UPDATE SPIKE';
+        if (deltaSpike) reasons.push('parameter movement > recent baseline');
+        if (valueSpike) reasons.push('value loss > recent baseline');
+      } else if (stats.earlyStopped || Number(stats.maxEpochKL) > CONFIG.ppo.targetKL) {
+        status = 'WATCH';
+        reasons.push(stats.earlyStopped ? 'PPO early-stop pressure' : 'KL above target');
+      }
+    }
+    const latestValidation = this.validationHistory.at(-1);
+    return {
+      status,
+      reasons,
+      policyLoss: finiteOrNull(stats.policyLoss),
+      valueLoss: finiteOrNull(stats.valueLoss),
+      entropy: finiteOrNull(stats.entropy),
+      approxKL: finiteOrNull(stats.approxKL),
+      maxEpochKL: finiteOrNull(stats.maxEpochKL),
+      clipFraction: finiteOrNull(stats.clipFraction),
+      advantageMean: finiteOrNull(stats.advantageMean),
+      advantageStd: finiteOrNull(stats.advantageStd),
+      explainedVariance: finiteOrNull(stats.explainedVariance),
+      gradientNormMean: finiteOrNull(stats.gradientNormMean),
+      gradientNormMax: finiteOrNull(stats.gradientNormMax),
+      gradientClipFraction: finiteOrNull(stats.gradientClipFraction),
+      parameterDeltaL2: finiteOrNull(stats.parameterDeltaL2),
+      parameterRelativeDelta: finiteOrNull(stats.parameterRelativeDelta),
+      parameterMaxAbsDelta: finiteOrNull(stats.parameterMaxAbsDelta),
+      learningRate: finiteOrNull(stats.learningRate),
+      earlyStopped: Boolean(stats.earlyStopped),
+      updateRejected: Boolean(stats.updateRejected),
+      rejectedUpdates: Math.max(0, Number(stats.rejectedUpdates) || 0),
+      captures: this.stabilityHistory.length,
+      events: this.stabilityEvents.length,
+      latestEvent: this.stabilityEvents.at(-1) || null,
+      lastValidationDeltas: latestValidation?.stabilityDeltas || null,
+    };
+  }
+
+  stabilityWindowSummary() {
+    const rows = this.stabilityHistory.slice(-Math.max(1, CONFIG.stability.spikeWindow));
+    return {
+      captures: rows.length,
+      maxKL: maxFinite(rows.map(x => x.maxEpochKL)),
+      maxClipFraction: maxFinite(rows.map(x => x.clipFraction)),
+      maxGradientNorm: maxFinite(rows.map(x => x.gradientNormMax)),
+      maxParameterRelativeDelta: maxFinite(rows.map(x => x.parameterRelativeDelta)),
+      maxValueLoss: maxFinite(rows.map(x => x.valueLoss)),
+      minExplainedVariance: minFinite(rows.map(x => x.explainedVariance)),
+      rejectedUpdates: rows.length ? Math.max(...rows.map(x => Number(x.rejectedUpdates) || 0)) : 0,
+    };
+  }
+
+  noteValidationStability(validation, previousValidation = null, previousRecord = null) {
+    const currentBalanced = Number(validation?.categoryScores?.balanced);
+    const previousBalanced = Number(previousRecord?.validation?.categoryScores?.balanced);
+    const balancedDelta = Number.isFinite(currentBalanced) && Number.isFinite(previousBalanced)
+      ? currentBalanced - previousBalanced
+      : null;
+    const priorStages = new Map((previousValidation?.stageResults || []).map(x => [x.stage, x]));
+    const skillDeltas = (validation?.stageResults || []).map(stage => {
+      const prior = priorStages.get(stage.stage);
+      const delta = prior && Number.isFinite(Number(prior.skillScore)) ? Number(stage.skillScore) - Number(prior.skillScore) : null;
+      return { stage: stage.stage, name: stage.name, score: stage.skillScore, delta };
+    });
+    const largestSkillDrop = skillDeltas.filter(x => Number.isFinite(x.delta)).sort((a, b) => a.delta - b.delta)[0] || null;
+    const balancedTriggered = Number.isFinite(balancedDelta) && balancedDelta <= -CONFIG.stability.validationBalancedDrop;
+    const skillTriggered = largestSkillDrop && largestSkillDrop.delta <= -CONFIG.stability.validationSkillDrop;
+    let event = null;
+    if (balancedTriggered || skillTriggered) {
+      event = {
+        atSteps: this.totalSteps,
+        lineageId: this.learnerLineage?.id || null,
+        curriculum: this.curriculum.stage,
+        trigger: balancedTriggered && skillTriggered ? 'balanced+skill-drop' : balancedTriggered ? 'balanced-drop' : 'skill-drop',
+        balancedScore: currentBalanced,
+        balancedDelta,
+        largestSkillDrop,
+        skillDeltas,
+        ppo: pickPpoDiagnostics(this.trainer.lastStats),
+        preValidationWindow: this.stabilityWindowSummary(),
+        rehearsalMix: this.recentRehearsalMix(),
+        curiosityRewardMode: this.curiosityRewardMode,
+      };
+      this.stabilityEvents.push(event);
+      if (this.stabilityEvents.length > CONFIG.stability.eventHistory) this.stabilityEvents.shift();
+    }
+    return { balancedDelta, skillDeltas, largestSkillDrop, event };
   }
 
   curiosityDiagnosticsSummary(limit = 80) {
@@ -668,6 +816,8 @@ export class TrainingSession {
   }
 
   runValidation() {
+    const previousSkillValidation = this.lastSkillValidation;
+    const previousValidationRecord = previousSkillValidation ? (this.validationHistory.at(-1) || null) : null;
     const validation = evaluateFullRetentionSuite(this.model, {
       episodesPerStage: CONFIG.validation.episodesPerStage,
       seedBase: CONFIG.validation.seedBase,
@@ -748,6 +898,7 @@ export class TrainingSession {
     const improved = archiveUpdates.includes('balanced');
     const regression = balancedEvidence;
     const autoRollback = null; // v0.1.2: behavioral regression is observed, never auto-restored.
+    const stabilityDeltas = this.noteValidationStability(validation, previousSkillValidation, previousValidationRecord);
 
     this.retentionStatus = {
       alerts: skillAssessment.alerts,
@@ -784,6 +935,7 @@ export class TrainingSession {
       learnerLineage: { ...this.learnerLineage },
       bestSteps: this.bestBrain?.savedAtSteps ?? null,
       bestScore: this.bestBrain?.validation?.categoryScores?.balanced ?? null,
+      stabilityDeltas,
     };
     this.validationHistory.push(record);
     if (this.validationHistory.length > 64) this.validationHistory.shift();
@@ -1015,6 +1167,9 @@ export class TrainingSession {
       curiosityBudgetResets: this.curiosityBudgetResets,
       auditRole: this.auditRole,
       auditId: this.curiosityAudit?.active ? this.curiosityAudit.id : null,
+      stabilityHistory: cloneSerializable(this.stabilityHistory),
+      stabilityEvents: cloneSerializable(this.stabilityEvents),
+      nextStabilityCaptureStep: this.nextStabilityCaptureStep,
     };
     const idx = this.frozenLearners.findIndex(x => x.id === lineageId);
     if (idx >= 0) this.frozenLearners[idx] = entry;
@@ -1070,6 +1225,9 @@ export class TrainingSession {
     this.lineageHistory.push(structuredLineage(lineage));
     if (this.lineageHistory.length > 64) this.lineageHistory.shift();
     this.resetBranchValidationState();
+    this.stabilityHistory = [];
+    this.stabilityEvents = [];
+    this.nextStabilityCaptureStep = nextStabilityCaptureAfter(this.totalSteps);
     this.rehearsalEpisodeHistory = [];
     for (let i = 0; i < this.envs.length; i++) this.resetEnv(i);
     const event = {
@@ -1140,6 +1298,11 @@ export class TrainingSession {
       ? target.rehearsalEpisodeHistory.slice(-CONFIG.continual.recentMixWindow)
       : [];
     this.episodeHistory = Array.isArray(target.episodeHistory) ? cloneSerializable(target.episodeHistory).slice(-200) : [];
+    this.stabilityHistory = Array.isArray(target.stabilityHistory) ? cloneSerializable(target.stabilityHistory).slice(-CONFIG.stability.historyPoints) : [];
+    this.stabilityEvents = Array.isArray(target.stabilityEvents) ? cloneSerializable(target.stabilityEvents).slice(-CONFIG.stability.eventHistory) : [];
+    this.nextStabilityCaptureStep = Number.isFinite(Number(target.nextStabilityCaptureStep))
+      ? Number(target.nextStabilityCaptureStep)
+      : nextStabilityCaptureAfter(this.totalSteps);
     this.learnerLineage = structuredLineage(target.lineage) || this.learnerLineage;
     this.learnerExperienceSteps = Math.max(0, Number(target.learnerExperienceSteps) || 0);
     if (!this.curiosityAudit?.active) this.resetBranchValidationState();
@@ -1163,7 +1326,7 @@ export class TrainingSession {
 
   snapshot() {
     return {
-      schema: 8,
+      schema: 9,
       seed: this.seed,
       totalSteps: this.totalSteps,
       totalEpisodes: this.totalEpisodes,
@@ -1208,17 +1371,26 @@ export class TrainingSession {
       hallOfFame: this.exportHallOfFame(),
       frozenLearners: this.frozenLearners,
       rollbackHistory: this.rollbackHistory,
+      stabilityHistory: this.stabilityHistory,
+      stabilityEvents: this.stabilityEvents,
+      nextStabilityCaptureStep: this.nextStabilityCaptureStep,
     };
   }
 
   restore(data) {
-    if (!data || ![1, 2, 3, 4, 5, 6, 7, 8].includes(data.schema)) throw new Error('Unsupported checkpoint schema');
+    if (!data || ![1, 2, 3, 4, 5, 6, 7, 8, 9].includes(data.schema)) throw new Error('Unsupported checkpoint schema');
     this.seed = data.seed;
     this.actionRng = new PRNG(this.seed ^ 0xa5a5a5a5);
     this.hallOfFame = [];
     this.nextHallOfFameId = 1;
     this.frozenLearners = [];
     this.learnerExperienceSteps = 0;
+    this.stabilityHistory = data.schema >= 9 && Array.isArray(data.stabilityHistory)
+      ? cloneSerializable(data.stabilityHistory).slice(-CONFIG.stability.historyPoints)
+      : [];
+    this.stabilityEvents = data.schema >= 9 && Array.isArray(data.stabilityEvents)
+      ? cloneSerializable(data.stabilityEvents).slice(-CONFIG.stability.eventHistory)
+      : [];
     this.totalSteps = data.totalSteps || 0;
     this.totalEpisodes = data.totalEpisodes || 0;
     this.envSeedCursor = data.envSeedCursor || 0;
@@ -1246,7 +1418,7 @@ export class TrainingSession {
       : nextHistoricalMilestoneAfter(this.totalSteps);
     if (data.schema === 1 && this.totalSteps > 0 && !this.milestones.has(this.totalSteps)) this.saveMilestone(this.totalSteps);
 
-    if (data.schema === 8 || data.schema === 7 || data.schema === 6 || data.schema === 5) {
+    if (data.schema === 9 || data.schema === 8 || data.schema === 7 || data.schema === 6 || data.schema === 5) {
       this.bestArchive = data.bestArchive && typeof data.bestArchive === 'object' ? data.bestArchive : {};
       this.bestBrain = this.bestArchive.balanced || data.bestBrain || null;
       this.validationHistory = Array.isArray(data.validationHistory) ? data.validationHistory.slice(-64) : [];
@@ -1361,6 +1533,10 @@ export class TrainingSession {
       this.lineageHistory = [structuredLineage(this.learnerLineage)];
       this.rehearsalEpisodeHistory = [];
     }
+
+    this.nextStabilityCaptureStep = data.schema >= 9 && Number.isFinite(Number(data.nextStabilityCaptureStep)) && Number(data.nextStabilityCaptureStep) > this.totalSteps
+      ? Number(data.nextStabilityCaptureStep)
+      : nextStabilityCaptureAfter(this.totalSteps);
 
     if (data.schema < 6) this.learnerExperienceSteps = Math.max(0, this.totalSteps - (Number(this.learnerLineage?.startedAtSteps) || 0));
     this.rollbackHistory = Array.isArray(data.rollbackHistory) ? data.rollbackHistory.slice(-32) : [];
@@ -1674,6 +1850,58 @@ function compactValidation(record) {
     promotionPending: record.promotionPending || [],
     autoRollback: null,
   };
+}
+
+function finiteOrNull(value) {
+  const n = Number(value);
+  return Number.isFinite(n) ? n : null;
+}
+
+function medianFinite(values) {
+  const nums = (values || []).map(Number).filter(Number.isFinite).sort((a, b) => a - b);
+  if (!nums.length) return null;
+  const mid = Math.floor(nums.length / 2);
+  return nums.length % 2 ? nums[mid] : (nums[mid - 1] + nums[mid]) / 2;
+}
+
+function maxFinite(values) {
+  const nums = (values || []).map(Number).filter(Number.isFinite);
+  return nums.length ? Math.max(...nums) : null;
+}
+
+function minFinite(values) {
+  const nums = (values || []).map(Number).filter(Number.isFinite);
+  return nums.length ? Math.min(...nums) : null;
+}
+
+function pickPpoDiagnostics(stats = {}) {
+  return {
+    policyLoss: finiteOrNull(stats.policyLoss),
+    valueLoss: finiteOrNull(stats.valueLoss),
+    entropy: finiteOrNull(stats.entropy),
+    approxKL: finiteOrNull(stats.approxKL),
+    maxEpochKL: finiteOrNull(stats.maxEpochKL),
+    clipFraction: finiteOrNull(stats.clipFraction),
+    advantageMean: finiteOrNull(stats.advantageMean),
+    advantageStd: finiteOrNull(stats.advantageStd),
+    explainedVariance: finiteOrNull(stats.explainedVariance),
+    gradientNormMean: finiteOrNull(stats.gradientNormMean),
+    gradientNormMax: finiteOrNull(stats.gradientNormMax),
+    gradientClipFraction: finiteOrNull(stats.gradientClipFraction),
+    parameterDeltaL2: finiteOrNull(stats.parameterDeltaL2),
+    parameterRelativeDelta: finiteOrNull(stats.parameterRelativeDelta),
+    parameterMaxAbsDelta: finiteOrNull(stats.parameterMaxAbsDelta),
+    learningRate: finiteOrNull(stats.learningRate),
+    epochsRun: finiteOrNull(stats.epochsRun),
+    earlyStopped: Boolean(stats.earlyStopped),
+    updateRejected: Boolean(stats.updateRejected),
+    rejectedUpdates: Math.max(0, Number(stats.rejectedUpdates) || 0),
+  };
+}
+
+function nextStabilityCaptureAfter(steps) {
+  const interval = Math.max(1, CONFIG.stability.captureIntervalSteps);
+  return (Math.floor(Math.max(0, Number(steps) || 0) / interval) + 1) * interval;
 }
 
 function nextValidationAfter(steps) {

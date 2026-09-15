@@ -12,7 +12,7 @@ import { computeGAE } from '../src/ai/rollout.js';
 import { TrainingSession, nextHistoricalMilestoneAfter, assessSkillRetention } from '../src/ai/session.js';
 import { evaluateCurriculumSuite, evaluateFullRetentionSuite, evaluateHeldoutGeneralizationSuite, generalizationDiagnostic } from '../src/evaluation/evaluator.js';
 
-test('release identity is v0.1.3.1 curiosity audit and ablation',()=>{assert.equal(VERSION,'0.1.3.1');assert.equal(BUILD_MARKER,'CURAUD-0131')});
+test('release identity is v0.1.3.2 continual-learning stability observatory',()=>{assert.equal(VERSION,'0.1.3.2');assert.equal(BUILD_MARKER,'STABOBS-0132')});
 test('PRNG is repeatable',()=>{const a=new PRNG(123),b=new PRNG(123);for(let i=0;i<100;i++)assert.equal(a.nextUint(),b.nextUint())});
 test('training, validation, comparison, curiosity-audit and final-holdout seed domains are separated',()=>{const domains=['train',CONFIG.validation.seedBase,CONFIG.generalization.compareSeedBase,CONFIG.curiosityAudit.seedBase,CONFIG.generalization.seedBase];const seeds=domains.map(x=>domainSeed(x,0));assert.equal(new Set(seeds).size,seeds.length)});
 test('world generation is deterministic',()=>{const a=new World(77,CURRICULUM[2]),b=new World(77,CURRICULUM[2]);assert.deepEqual(a.food,b.food);assert.deepEqual(a.hazards,b.hazards);assert.deepEqual(a.walls,b.walls);assert.deepEqual(Array.from(a.observe()),Array.from(b.observe()))});
@@ -36,13 +36,13 @@ test('manual Champion fork creates a new lineage without rewinding experience',(
 test('PPO uses scheduled entropy, bounded adaptive LR and finite KL stats',()=>{const s=new TrainingSession({seed:19,envCount:2,autoCurriculum:false});s.totalSteps=4_000_000;const {metric}=s.trainRollout(8);assert.ok(metric.entropyCoef<CONFIG.ppo.entropyStart);assert.ok(metric.entropyCoef>=CONFIG.ppo.entropyEnd);assert.ok(metric.learningRate>=CONFIG.ppo.minLearningRate&&metric.learningRate<=CONFIG.ppo.maxLearningRate);assert.ok(Number.isFinite(metric.maxEpochKL));assert.ok(metric.epochsRun>=1&&metric.epochsRun<=CONFIG.ppo.epochs)});
 test('PPO hard-KL guard rejects an obviously destructive update and restores model',()=>{const model=new RecurrentActorCritic(55);const trainer=new PPOTrainer(model,56);const obs=new Float64Array(CONFIG.model.obsSize);obs[9]=1;const h=model.zeroHidden();const before=model.serialize();const transitions=[0,1,2,3].map((action,i)=>({obs,hPrev:h,action:action%CONFIG.model.actionSize,logProb:-20-i,value:0,reward:0,done:false}));const advantages=new Float64Array([1,-1,1,-1]);const returns=new Float64Array([1,-1,1,-1]);const stats=trainer.update(transitions,advantages,returns,{trainingStep:0});assert.equal(stats.updateRejected,true);assert.deepEqual(model.serialize(),before);assert.ok(trainer.learningRate<CONFIG.ppo.learningRate)});
 
-test('schema-8 checkpoint roundtrip preserves policy, curiosity, Champions, lineage, Hall, branches and rehearsal state',()=>{const a=new TrainingSession({seed:3,envCount:2,autoCurriculum:false});a.curriculum.stage=2;for(let i=0;i<24;i++)a.resetEnv(i%2);a.trainRollout(4);a.runValidation();a.pinChampion('balanced');const oldLineage=a.learnerLineage.id;a.forkFromChampion('balanced');const snap=a.snapshot();assert.equal(snap.schema,8);assert.ok(snap.hallOfFame.entries.length>=1);assert.ok(snap.frozenLearners.some(x=>x.id===oldLineage));const b=new TrainingSession({seed:4,envCount:2,autoCurriculum:false});b.restore(snap);assert.equal(b.totalSteps,a.totalSteps);assert.deepEqual(Array.from(b.model.params.bp),Array.from(a.model.params.bp));assert.equal(b.bestBrain.savedAtSteps,a.bestBrain.savedAtSteps);assert.deepEqual(b.skillBestRecords,a.skillBestRecords);assert.deepEqual(b.promotionStreaks,a.promotionStreaks);assert.deepEqual(b.learnerLineage,a.learnerLineage);assert.deepEqual(b.rehearsalEpisodeHistory,a.rehearsalEpisodeHistory);assert.equal(b.hallOfFame.length,a.hallOfFame.length);assert.equal(b.frozenLearners.length,a.frozenLearners.length);assert.equal(b.learnerExperienceSteps,a.learnerExperienceSteps);assert.deepEqual(b.curiosity.serialize(),a.curiosity.serialize())});
+test('schema-9 checkpoint roundtrip preserves policy, curiosity, Champions, lineage, Hall, branches and rehearsal state',()=>{const a=new TrainingSession({seed:3,envCount:2,autoCurriculum:false});a.curriculum.stage=2;for(let i=0;i<24;i++)a.resetEnv(i%2);a.trainRollout(4);a.runValidation();a.pinChampion('balanced');const oldLineage=a.learnerLineage.id;a.forkFromChampion('balanced');const snap=a.snapshot();assert.equal(snap.schema,9);assert.ok(snap.hallOfFame.entries.length>=1);assert.ok(snap.frozenLearners.some(x=>x.id===oldLineage));const b=new TrainingSession({seed:4,envCount:2,autoCurriculum:false});b.restore(snap);assert.equal(b.totalSteps,a.totalSteps);assert.deepEqual(Array.from(b.model.params.bp),Array.from(a.model.params.bp));assert.equal(b.bestBrain.savedAtSteps,a.bestBrain.savedAtSteps);assert.deepEqual(b.skillBestRecords,a.skillBestRecords);assert.deepEqual(b.promotionStreaks,a.promotionStreaks);assert.deepEqual(b.learnerLineage,a.learnerLineage);assert.deepEqual(b.rehearsalEpisodeHistory,a.rehearsalEpisodeHistory);assert.equal(b.hallOfFame.length,a.hallOfFame.length);assert.equal(b.frozenLearners.length,a.frozenLearners.length);assert.equal(b.learnerExperienceSteps,a.learnerExperienceSteps);assert.deepEqual(b.curiosity.serialize(),a.curiosity.serialize())});
 test('schema-3 v0.1.1 archive is preserved for inspection and scheduled for v3 recalibration',()=>{const a=new TrainingSession({seed:31,envCount:2,autoCurriculum:false});a.runValidation();const snap=a.snapshot();const legacy={...snap,schema:3};delete legacy.skillBestRecords;delete legacy.skillRegressionStreaks;delete legacy.balancedRegressionStreak;delete legacy.pendingArchiveMigration;delete legacy.archiveNeedsRebaseline;const b=new TrainingSession({seed:32,envCount:2,autoCurriculum:false});b.restore(legacy);assert.equal(b.archiveNeedsRebaseline,true);assert.ok(b.bestBrain?.model);assert.ok(b.pendingArchiveMigration.length>=1);assert.equal(b.nextValidationStep,b.totalSteps);assert.ok(b.legacyValidationHistory.length>=1);const v=b.runValidation();assert.equal(b.archiveNeedsRebaseline,false);assert.ok(v.migratedArchive.length>=1);assert.match(v.validation.protocol,/retention-v3-ci/)});
 test('schema-2 save migration preserves old protected best and schedules immediate rebaseline',()=>{const a=new TrainingSession({seed:23,envCount:2,autoCurriculum:false});a.trainRollout(4);a.runValidation();const snap=a.snapshot();const legacy={schema:2,seed:snap.seed,totalSteps:3_758_688,totalEpisodes:6000,envSeedCursor:snap.envSeedCursor,curriculum:snap.curriculum,model:snap.model,optimizer:snap.optimizer,metrics:snap.metrics,milestones:snap.milestones,bestBrain:snap.bestBrain,bestBrains:{legacy:snap.bestBrain},validationHistory:[],lastValidationStep:3_500_000,nextValidationStep:3_750_000,rollbackHistory:[]};const b=new TrainingSession({seed:99,envCount:2,autoCurriculum:false});b.restore(legacy);assert.equal(b.totalSteps,3_758_688);assert.ok(b.pendingLegacyBest?.model);assert.equal(b.bestBrain.savedAtSteps,snap.bestBrain.savedAtSteps);assert.equal(b.nextValidationStep,b.totalSteps);const v=b.runValidation();assert.equal(v.validation.maxStage,CURRICULUM.length-1);assert.equal(b.pendingLegacyBest,null);assert.ok(b.getArchiveBrain('balanced'))});
 test('schema-1 long-run migration snapshots exact loaded brain and does not backfill fake milestones',()=>{const a=new TrainingSession({seed:44,envCount:2,autoCurriculum:false});const snap=a.snapshot();const steps=2_122_848;const legacy={schema:1,seed:snap.seed,totalSteps:steps,totalEpisodes:3000,envSeedCursor:snap.envSeedCursor,curriculum:{stage:2,history:[]},model:snap.model,optimizer:snap.optimizer,metrics:[],milestones:snap.milestones};const b=new TrainingSession({seed:45,envCount:2,autoCurriculum:false});b.restore(legacy);assert.equal(b.nextMilestoneStep,2_250_000);assert.ok(b.milestones.has(steps));assert.equal(b.milestones.has(1_250_000),false);assert.equal(b.nextValidationStep,b.totalSteps)});
 
 test('reward is decomposed into finite named components',()=>{const w=new World(12345,CURRICULUM[1]);const r=w.step(1);const parts=r.info.rewardParts;for(const k of ['survival','energy','wall','food','hazard','approach','death'])assert.ok(Number.isFinite(parts[k]),k)});
-test('v0.1.3.1 UI preserves Hall, branching, performance, lineage, rehearsal and curiosity-audit diagnostics',async()=>{const html=await readFile(new URL('../index.html',import.meta.url),'utf8');for(const id of ['brainSource','hallBrainOptions','bestOption','overallOption','foragerOption','survivorOption','efficiencyOption','pinChampionBtn','restoreBestBtn','branchSelect','switchBranchBtn','researchLineageVal','policyOriginVal','hallVal','branchesVal','hallList','skillRetention','lrVal','klVal','epochsVal','retentionAlert','lineageVal','rehearsalVal','promotionVal','simSpeedVal','ppoMsVal','fpsVal','uiMsVal','validationMsVal','storageMsVal','curiosityInfluenceVal','curiosityAppliedVal','curiosityShareVal','curiosityResetsVal','curiosityBudgetUseVal','curiosityExhaustVal','curiosityModeSelect','startCuriosityAuditBtn','switchCuriosityAuditBtn','endCuriosityAuditBtn','curiosityAuditResults'])assert.match(html,new RegExp(`id="${id}"`));assert.match(html,/v0\.1\.3\.1/);assert.match(html,/Fork New Learner/);assert.match(html,/Hall of Fame/);assert.match(html,/Adaptive/);assert.match(html,/observational only/);assert.match(html,/final holdout only diagnoses/)});
+test('v0.1.3.2 UI preserves Hall, branching, performance, lineage, rehearsal and curiosity-audit diagnostics',async()=>{const html=await readFile(new URL('../index.html',import.meta.url),'utf8');for(const id of ['brainSource','hallBrainOptions','bestOption','overallOption','foragerOption','survivorOption','efficiencyOption','pinChampionBtn','restoreBestBtn','branchSelect','switchBranchBtn','researchLineageVal','policyOriginVal','hallVal','branchesVal','hallList','skillRetention','lrVal','klVal','epochsVal','retentionAlert','lineageVal','rehearsalVal','promotionVal','simSpeedVal','ppoMsVal','fpsVal','uiMsVal','validationMsVal','storageMsVal','curiosityInfluenceVal','curiosityAppliedVal','curiosityShareVal','curiosityResetsVal','curiosityBudgetUseVal','curiosityExhaustVal','curiosityModeSelect','startCuriosityAuditBtn','switchCuriosityAuditBtn','endCuriosityAuditBtn','curiosityAuditResults'])assert.match(html,new RegExp(`id="${id}"`));assert.match(html,/v0\.1\.3\.2/);assert.match(html,/Fork New Learner/);assert.match(html,/Hall of Fame/);assert.match(html,/Adaptive/);assert.match(html,/observational only/);assert.match(html,/final holdout only diagnoses/)});
 
 test('skill-regression evidence is watch-first and confirmed only on repeat',()=>{const stages=[{stage:0,name:'Motor Nursery',skillScore:.33,skillCiLow:.25,skillCiHigh:.41}];const best=[{stage:0,name:'Motor Nursery',score:.74,ciLow:.66,ciHigh:.82,atSteps:1000},null,null,null];const a=assessSkillRetention(stages,best,[0,0,0,0]);assert.equal(a.alerts.length,1);assert.equal(a.alerts[0].severity,'catastrophic');assert.equal(a.alerts[0].confirmed,false);const b=assessSkillRetention(stages,best,a.streaks);assert.equal(b.alerts[0].confirmed,true);assert.equal(b.alerts[0].streak,2)});
 test('final held-out generalization suite is all-skills and isolated from validation',()=>{const m=new RecurrentActorCritic(77);const r=evaluateHeldoutGeneralizationSuite(m,{episodesPerStage:2,seedBase:'heldout:final:test'});assert.equal(r.stageResults.length,CURRICULUM.length);assert.equal(r.episodes,2*CURRICULUM.length);assert.match(r.protocol,/heldout-generalization-v2/);assert.doesNotMatch(r.protocol,/validation:v3/)});
@@ -239,7 +239,7 @@ test('evaluation code remains curiosity-free and cannot award intrinsic reward',
   assert.deepEqual(a,b);
 });
 
-test('schema-6 migration preserves old policy and starts a fresh curiosity model; schema-8 then roundtrips it',()=>{
+test('schema-6 migration preserves old policy and starts a fresh curiosity model; schema-9 then roundtrips it',()=>{
   const a=new TrainingSession({seed:306,envCount:2,autoCurriculum:false});
   a.trainRollout(8);
   const current=a.snapshot();
@@ -333,7 +333,7 @@ test('curiosity A/B switch restores branch-specific reward influence and branch-
   assert.equal(s.learnerExperienceSteps,123456);
 });
 
-test('schema-8 roundtrip preserves an active curiosity audit and schema-7 migration defaults safely to reward-on with no audit',()=>{
+test('schema-9 roundtrip preserves an active curiosity audit and schema-7 migration defaults safely to reward-on with no audit',()=>{
   const a=new TrainingSession({seed:405,envCount:2,autoCurriculum:true});
   a.startCuriosityAudit();
   a.learnerExperienceSteps=654321;
@@ -401,4 +401,64 @@ test('curiosity A/B keeps ordinary milestones and episode return windows branch-
   assert.ok(!s.episodeHistory.some(x=>x.totalReward===222));
   s.endCuriosityAudit();
   assert.ok(s.nextMilestoneStep>s.totalSteps);
+});
+
+test('PPO stability observatory exposes finite gradient, critic and parameter-movement telemetry without changing update semantics',()=>{
+  const s=new TrainingSession({seed:510,envCount:2,autoCurriculum:false});
+  s.nextValidationStep=Number.MAX_SAFE_INTEGER;
+  const {metric}=s.trainRollout(16);
+  for(const k of ['policyLoss','valueLoss','explainedVariance','gradientNormMean','gradientNormMax','gradientClipFraction','parameterDeltaL2','parameterRelativeDelta','parameterMaxAbsDelta'])assert.ok(Number.isFinite(metric[k]),k);
+  assert.ok(metric.gradientNormMax>=0);
+  assert.ok(metric.gradientClipFraction>=0&&metric.gradientClipFraction<=1);
+  assert.ok(metric.parameterRelativeDelta>=0);
+  assert.ok(['STABLE','WATCH','UPDATE SPIKE','GUARD'].includes(s.stabilitySummary().status));
+});
+
+test('schema-9 persists stability capture history and regression events while schema-8 migrates with empty telemetry',()=>{
+  const a=new TrainingSession({seed:511,envCount:2,autoCurriculum:false});
+  a.totalSteps=CONFIG.stability.captureIntervalSteps;
+  a.nextValidationStep=Number.MAX_SAFE_INTEGER;
+  a.trainRollout(8);
+  a.stabilityEvents.push({atSteps:a.totalSteps,trigger:'test-observation',balancedDelta:-0.2});
+  const snap=a.snapshot();
+  assert.equal(snap.schema,9);
+  assert.ok(snap.stabilityHistory.length>=1);
+  const b=new TrainingSession({seed:512,envCount:2,autoCurriculum:false});
+  b.restore(snap);
+  assert.deepEqual(b.stabilityHistory,a.stabilityHistory);
+  assert.deepEqual(b.stabilityEvents,a.stabilityEvents);
+  const legacy=structuredClone(snap);legacy.schema=8;delete legacy.stabilityHistory;delete legacy.stabilityEvents;delete legacy.nextStabilityCaptureStep;
+  const c=new TrainingSession({seed:513,envCount:2,autoCurriculum:false});
+  c.restore(legacy);
+  assert.deepEqual(c.stabilityHistory,[]);
+  assert.deepEqual(c.stabilityEvents,[]);
+  assert.ok(c.nextStabilityCaptureStep>c.totalSteps);
+});
+
+test('large validation regression creates an observational stability event without mutating policy weights',()=>{
+  const s=new TrainingSession({seed:514,envCount:1,autoCurriculum:false});
+  const before=JSON.stringify(s.model.serialize());
+  const previous={stageResults:[
+    {stage:0,name:'Motor Nursery',skillScore:.9},{stage:1,name:'Foraging',skillScore:.8},{stage:2,name:'Obstacle Avoidance',skillScore:.75},{stage:3,name:'Scarcity',skillScore:.7},
+  ]};
+  const current={categoryScores:{balanced:.58},stageResults:[
+    {stage:0,name:'Motor Nursery',skillScore:.88},{stage:1,name:'Foraging',skillScore:.79},{stage:2,name:'Obstacle Avoidance',skillScore:.50},{stage:3,name:'Scarcity',skillScore:.69},
+  ]};
+  const result=s.noteValidationStability(current,previous,{validation:{categoryScores:{balanced:.76}}});
+  assert.ok(result.event);
+  assert.equal(result.event.trigger,'balanced+skill-drop');
+  assert.equal(s.stabilityEvents.length,1);
+  assert.equal(JSON.stringify(s.model.serialize()),before);
+});
+
+test('compact research UI collapses long secondary panels and applies iPhone-safe form sizing',async()=>{
+  const html=await readFile(new URL('../index.html',import.meta.url),'utf8');
+  const css=await readFile(new URL('../styles.css',import.meta.url),'utf8');
+  for(const id of ['stabilityCompactSummary','stabilityStatusVal','stabilityPolicyLossVal','stabilityValueLossVal','stabilityExplainedVal','stabilityKlVal','stabilityClipVal','stabilityGradVal','stabilityParamDeltaVal','stabilityValidationText','stabilityEventsText','curiosityCompactSummary','skillCompactSummary','resultsCompactSummary'])assert.match(html,new RegExp(`id="${id}"`));
+  assert.match(html,/<details class="panel stabilityPanel collapsiblePanel"/);
+  assert.match(html,/<details class="panel curiosityPanel collapsiblePanel"/);
+  assert.match(html,/<details class="panel skillPanel collapsiblePanel"/);
+  assert.match(html,/<details class="panel resultsPanel collapsiblePanel"/);
+  assert.match(css,/select,input,textarea\{font-size:16px!important\}/);
+  assert.match(css,/overflow-x:hidden/);
 });

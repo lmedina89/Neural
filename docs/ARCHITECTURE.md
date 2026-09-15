@@ -1,4 +1,4 @@
-# Architecture — v0.1.3.1
+# Architecture — v0.1.3.2
 
 ## Policy learner
 
@@ -12,26 +12,15 @@ The policy has **1,040 learned parameters** and remains on the same recurrent PP
 
 The auxiliary forward model has **441 learned parameters**. It predicts the next sensory state and learns from real transitions. It does not choose actions directly and is never used to score evaluation performance.
 
-## Reward influence modes
+## Reward influence modes and preserved A/B audit
 
-For sampled transitions, the predictor computes a bounded potential intrinsic bonus from prediction surprise.
+Curiosity still supports `reward` and `observe` modes. The v0.1.3.1 matched CONTROL/CURIOSITY audit remains fully available and its results persist; v0.1.3.2 does not retune it.
 
-- `reward`: PPO receives `external + intrinsic` reward.
-- `observe`: the predictor still scores and learns the transition, but PPO receives `external + 0` intrinsic reward.
+## Stability observatory
 
-Both modes retain the same predictor architecture, sampling stride, normalization, and shadow episode-budget accounting.
+The PPO trainer exposes diagnostic values from the same update it already performs: losses, KL, clip fraction, advantage distribution, rollout critic explained variance, gradient norms/clipping, and parameter movement. Session-level telemetry is downsampled every 50k global steps.
 
-## Matched curiosity A/B audit
-
-Starting an audit freezes an exact origin and creates two descendants:
-
-`origin → CONTROL (observe-only)`
-
-`origin → CURIOSITY (reward-on)`
-
-Both inherit identical policy weights, PPO optimizer/RNG, curiosity predictor/optimizer, action RNG, curriculum state, environment seed cursor, and rehearsal history. Automatic curriculum movement is frozen during the audit. At equal branch-local progress both branches receive the same PPO schedule age, preventing global experiment order from altering annealing.
-
-Ordinary milestones, normal validation/Champion promotion, and unrelated branch forks are suspended while the audit is active. Audit evaluations use their own read-only seed domain and cannot mutate policy or Champion state.
+Ordinary validation can emit a compact regression event when a balanced score falls >=10 points or an individual skill falls >=15 points versus the previous validation on the same lineage. Events include the preceding stability-window summary and are strictly observational.
 
 ## Data separation
 
@@ -43,4 +32,4 @@ Ordinary milestones, normal validation/Champion promotion, and unrelated branch 
 
 ## Persistence
 
-Schema 8 stores curiosity influence mode, predictor state, audit definition/results, branch role/progress, and branch-specific episode windows. Schemas 1–8 load; schema 7 defaults to reward-on with no active audit.
+Schema 9 stores the prior schema-8 curiosity/A/B state plus active-lineage stability history, regression events, and the next capture point. Frozen learner branches keep their own telemetry. Schemas 1–9 load; schema 8 migrates with empty stability history and otherwise preserves its exact state.

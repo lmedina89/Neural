@@ -14,7 +14,7 @@
         <div class="eyebrow">MICROMIND • LEARNING LABORATORY</div>
         <h1>Watch a tiny brain actually learn.</h1>
       </div>
-      <div class="build" id="buildTag">v0.1.3.1 • CURAUD-0131</div>
+      <div class="build" id="buildTag">v0.1.3.2 • STABOBS-0132</div>
     </header>
 
     <section class="controls" aria-label="Main controls">
@@ -59,8 +59,9 @@
       <div><b>VALIDATION AUTOSAVE</b><span id="autosaveSlotInfo">Checking browser storage…</span></div>
     </section>
 
-    <section class="researchStatusPanel panel" aria-label="Research status">
-      <div class="panelHead"><strong>RESEARCH STATUS</strong><span>policy preservation + lineage</span></div>
+    <details class="researchStatusPanel panel collapsiblePanel" aria-label="Research status">
+      <summary class="panelSummary"><strong>RESEARCH STATUS</strong><span id="researchCompactSummary">policy preservation + lineage</span></summary>
+      <div class="collapsibleBody">
       <div class="researchGrid">
         <div><span>experience age</span><b id="experienceAgeVal">0</b></div>
         <div><span>learner lineage</span><b id="researchLineageVal">—</b></div>
@@ -70,7 +71,8 @@
         <div><span>frozen branches</span><b id="branchesVal">0</b></div>
       </div>
       <div id="hallList" class="hallList">No pinned historic brains yet.</div>
-    </section>
+      </div>
+    </details>
 
     <details class="helpPanel">
       <summary>What do the controls and numbers mean?</summary>
@@ -172,9 +174,32 @@
       </article>
     </section>
 
+    <details class="panel stabilityPanel collapsiblePanel" aria-label="PPO stability observatory">
+      <summary class="panelSummary"><strong>PPO STABILITY</strong><span id="stabilityCompactSummary">observational telemetry • no learning intervention</span></summary>
+      <div class="collapsibleBody">
+        <div class="stabilityNotice">Observational only. This panel records what PPO was doing before validation swings; it never changes weights, learning rate, curriculum, curiosity, or Champion state.</div>
+        <div class="stabilityGrid">
+          <div><span>status</span><b id="stabilityStatusVal">—</b></div>
+          <div><span>policy loss</span><b id="stabilityPolicyLossVal">—</b></div>
+          <div><span>value loss</span><b id="stabilityValueLossVal">—</b></div>
+          <div><span>explained variance</span><b id="stabilityExplainedVal">—</b></div>
+          <div><span>max KL</span><b id="stabilityKlVal">—</b></div>
+          <div><span>PPO clip fraction</span><b id="stabilityClipVal">—</b></div>
+          <div><span>gradient norm</span><b id="stabilityGradVal">—</b></div>
+          <div><span>grad clipped batches</span><b id="stabilityGradClipVal">—</b></div>
+          <div><span>relative weight Δ</span><b id="stabilityParamDeltaVal">—</b></div>
+          <div><span>max weight Δ</span><b id="stabilityParamMaxVal">—</b></div>
+          <div><span>advantage μ / σ</span><b id="stabilityAdvantageVal">—</b></div>
+          <div><span>rejected updates</span><b id="stabilityRejectedVal">—</b></div>
+        </div>
+        <div class="stabilityValidation" id="stabilityValidationText">Waiting for two comparable validation checkpoints to calculate per-skill deltas.</div>
+        <div class="stabilityEvents" id="stabilityEventsText">No large validation regression event captured yet.</div>
+      </div>
+    </details>
 
-    <section class="panel curiosityPanel" aria-label="Curiosity and prediction model">
-      <div class="panelHead"><strong>CURIOSITY / PREDICTION</strong><span>learned forward model • evaluation curiosity OFF</span></div>
+    <details class="panel curiosityPanel collapsiblePanel" aria-label="Curiosity and prediction model">
+      <summary class="panelSummary"><strong>CURIOSITY / PREDICTION</strong><span id="curiosityCompactSummary">learned forward model • evaluation curiosity OFF</span></summary>
+      <div class="collapsibleBody">
       <div class="curiosityGrid">
         <div><span>prediction error</span><b id="curiosityErrorVal">—</b></div>
         <div><span>novelty</span><b id="curiosityNoveltyVal">—</b></div>
@@ -218,19 +243,20 @@
         </div>
         <div id="curiosityAuditResults" class="curiosityAuditResults">Audit idle. Start it only after loading/saving the learner you want to preserve as the experiment origin.</div>
       </div>
-    </section>
+      </div>
+    </details>
 
-    <section class="panel skillPanel">
-      <div class="panelHead"><strong>SKILL RETENTION</strong><span>validation:v3 • observational only • 95% ranges</span></div>
-      <div id="skillRetention" class="skillRetention">Waiting for autonomous continual-learning validation…</div>
-    </section>
+    <details class="panel skillPanel collapsiblePanel">
+      <summary class="panelSummary"><strong>SKILL RETENTION</strong><span id="skillCompactSummary">validation:v3 • observational only • 95% ranges</span></summary>
+      <div class="collapsibleBody"><div id="skillRetention" class="skillRetention">Waiting for autonomous continual-learning validation…</div></div>
+    </details>
 
-    <section class="panel resultsPanel">
-      <div class="panelHead"><strong>EVALUATION / CHECKPOINTS</strong><span>validation promotes Champions • final holdout only diagnoses</span></div>
-      <div id="resultsText" class="resultsText">No evaluation run yet.</div>
-    </section>
+    <details class="panel resultsPanel collapsiblePanel">
+      <summary class="panelSummary"><strong>EVALUATION / CHECKPOINTS</strong><span id="resultsCompactSummary">validation promotes Champions • final holdout only diagnoses</span></summary>
+      <div class="collapsibleBody"><div id="resultsText" class="resultsText">No evaluation run yet.</div></div>
+    </details>
 
-    <footer>MicroMind v0.1.3.1 audits curiosity instead of assuming it helps: observe-only ablation, episode accounting, and matched Control/Curiosity branches use a separate read-only evaluation domain. The 1,040-parameter policy and protected Champion archive remain intact.</footer>
+    <footer>MicroMind v0.1.3.2 adds an observational PPO Stability Observatory and compact collapsible research panels. Learning math, curiosity reward, curriculum, and protected Champion behavior remain unchanged.</footer>
   </main>
   <script type="module" src="./src/app/main.js"></script>
 </body>

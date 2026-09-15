@@ -1,26 +1,17 @@
-# v0.1.3.1 benchmark / audit notes
+# v0.1.3.2 benchmark / audit notes
 
 ## Baseline
 
-Built directly from exact packaged v0.1.3 `CURIOUS-013` (SHA-256 `df786484b710936674436a61912d5914b0c9e154975d5a58922a35affd9ef19b`). Policy architecture, PPO implementation, world physics/rewards, curriculum definitions, and evaluation math are unchanged.
+Built directly from exact packaged v0.1.3.1 `CURAUD-0131`. Policy architecture, PPO hyperparameters, reward coefficients, world physics, curriculum definitions, curiosity behavior, and evaluation math are unchanged.
 
-## What is benchmarked now
+## Numerical parity check
 
-This release is an experimental-control release. Its most important performance property is that observe-only curiosity retains predictor learning without adding intrinsic reward, and that matched CONTROL/CURIOSITY descendants receive equal branch-local schedules and fixed audit evaluation seeds.
+A deterministic development run trained v0.1.3.1 and v0.1.3.2 from the same seed for the same 3,840-step sequence with automatic validation disabled. The resulting policy weights, optimizer numeric state (excluding expanded diagnostic `lastStats` fields), curiosity predictor state, curriculum state, and global step count matched exactly by SHA-256.
 
-Automated tests cover those invariants directly.
+## Stability overhead
 
-## Development throughput smoke
-
-Headless Node, 8 environments, Scarcity stage, rollout 36:
-
-- wall-clock: **45,824 steps/sec**;
-- last-profile simulation: **142,403 steps/sec**;
-- PPO: **3.47 ms/update**;
-- curiosity predictor update: **0.20 ms/update**.
-
-These numbers are environment-specific and are not compared directly with earlier five-process release medians. Physical iPhone Safari remains the performance authority.
+The added diagnostics reuse values already computed during PPO and perform one parameter-delta scan per PPO update. Long-term stability capture is downsampled every 50k global steps. Physical iPhone Safari remains the performance authority.
 
 ## Evaluation isolation
 
-Normal validation, historical comparison, final unseen testing, and the new curiosity-ablation evaluation all score external behavior with curiosity reward OFF. The A/B result stream is observational and cannot promote the protected Champion.
+Normal validation, historical comparison, final unseen testing, and curiosity-ablation evaluation all remain curiosity-free. Stability telemetry and regression events cannot promote, restore, or modify any policy.

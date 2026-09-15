@@ -1,113 +1,107 @@
-# MicroMind v0.1.3.1 — Build Report
+# MicroMind v0.1.3.2 — Build Report
 
-**Milestone:** Curiosity Audit & Ablation  
-**Build marker:** `CURAUD-0131`  
-**Baseline:** exact packaged v0.1.3 `CURIOUS-013`  
-**Baseline archive SHA-256:** `df786484b710936674436a61912d5914b0c9e154975d5a58922a35affd9ef19b`  
-**Save schema:** 8 (loads schemas 1–8)
+**Milestone:** Continual Learning Stability Observatory + Compact Mobile Research UI  
+**Build marker:** `STABOBS-0132`  
+**Baseline:** exact packaged v0.1.3.1 `CURAUD-0131`  
+**Baseline archive SHA-256:** `9418d2dcbe09e7e8f4e0ac10cd3b0b4ce319c1febbf383745e501fd496390dcd`  
+**Save schema:** 9 (loads schemas 1–9)
 
 ## Why this release exists
 
-Physical multi-million-step testing after v0.1.3 showed that the curiosity predictor was mechanically active, but the continuing Learner did not clearly outperform the pre-curiosity Champion and showed substantial volatility/retention regression. v0.1.3.1 therefore changes the next milestone from “add more intelligence” to **measure whether curiosity reward is helping at all**.
+The physical v0.1.3.1 matched curiosity ablation completed both 2M-step descendants. The Control branch (predictor active, intrinsic reward influence zero) and Curiosity branch (existing bounded curiosity reward) both exhibited large intermediate validation swings and ended the final paired checkpoint with no material difference. Curiosity reward magnitude was small and its budget was not being exhausted in normal episodes.
 
-This release deliberately does not retune the curiosity coefficient, episode cap, policy network, PPO hyperparameters, external reward, world rules, or rehearsal targets. Direct hash comparison against the packaged v0.1.3 baseline confirms `model.js`, `ppo.js`, `rollout.js`, `world.js`, `curriculum.js`, `evaluator.js`, and `curiosity.js` are unchanged.
+That evidence does not prove curiosity is beneficial, but it makes it a poor explanation for the learner's broader volatility. The next milestone therefore instruments the existing PPO learner instead of retuning it.
 
-## Controlled ablation
+## Learning behavior intentionally unchanged
 
-Added two curiosity influence modes:
+No learning-control parameter was altered:
 
-- `reward`: predictor learns and bounded intrinsic reward is applied to PPO;
-- `observe`: predictor learns and all diagnostics/shadow budget accounting continue, while applied PPO intrinsic reward is exactly zero.
+- policy architecture: unchanged;
+- curiosity predictor architecture: unchanged;
+- PPO learning rate bounds, clip, KL guards, entropy schedule, epochs, Adam settings, gradient clipping threshold: unchanged;
+- external and intrinsic reward coefficients: unchanged;
+- curiosity cap/budget: unchanged;
+- rehearsal distribution and curriculum logic: unchanged;
+- Champion confirmation and validation logic: unchanged;
+- evaluation domains: unchanged.
 
-Added a matched A/B audit that:
+`src/ai/ppo.js` changes only expose measurements of the already-computed update. A deterministic development parity run against v0.1.3.1 confirmed identical policy weights, optimizer numeric state (excluding expanded `lastStats` diagnostics), curiosity predictor state, curriculum state, and step count after the same 3,840-step sequence.
 
-1. freezes the exact current Learner as a recoverable origin;
-2. creates CONTROL and CURIOSITY descendants from identical serialized policy, optimizer, predictor, RNG, curriculum, and seed-cursor state;
-3. freezes autonomous curriculum changes for the experiment;
-4. evaluates both branches on `heldout:curiosity-ablation:v1` with identical protocol/seeds;
-5. uses branch-local PPO schedule age so branch order cannot change annealing behavior;
-6. isolates each branch's recent episode-return window;
-7. suspends ordinary historical milestones and Champion promotion while the audit is active;
-8. never auto-promotes, auto-restores, or declares a policy winner.
+## Stability telemetry
 
-Default audit budget: **2,000,000 branch-local steps per branch**, read-only evaluation every **500,000 branch-local steps**.
+Added per-update diagnostics:
 
-## Curiosity instrumentation
+- policy/value losses;
+- rollout critic explained variance;
+- approximate and max epoch KL;
+- PPO clip fraction;
+- advantage mean/std;
+- gradient norm mean/max;
+- gradient-clipped minibatch fraction;
+- policy parameter L2 delta;
+- relative parameter delta;
+- maximum absolute parameter delta;
+- rejected hard-KL update count.
 
-Added episode-level accounting for:
+The session downsamples telemetry every 50k global steps and keeps up to 240 captures (roughly 12M steps of history at the configured interval).
 
-- external reward;
-- potential and applied intrinsic reward;
-- reward-magnitude share;
-- prediction-error mean/max;
-- novelty mean/max;
-- curiosity samples;
-- curiosity budget used;
-- budget exhaustion occurrence and approximate episode fraction;
-- budget reset count.
+## Regression-event capture
 
-The UI now distinguishes **potential bonus** from **applied bonus** and identifies reward influence as Reward ON or Observe only.
+Ordinary validations compare against the previous validation on the same active lineage. A diagnostic event is emitted for a >=10-point balanced drop or >=15-point individual-skill drop.
 
-### Budget-label correction
+Each event preserves:
 
-The v0.1.3 source initializes `curiosityEpisodeBudget` to `0.25` and decrements it as intrinsic bonus is spent. Therefore a display of `0.250 / 0.25` means **full budget remaining**, not “budget exhausted.” v0.1.3.1 corrects the label to `BUDGET REMAINING` and adds direct episode accounting so no visual guess is required.
+- balanced delta;
+- every per-skill delta;
+- largest skill drop;
+- current PPO diagnostic snapshot;
+- compact preceding telemetry-window extrema;
+- rehearsal mix/curriculum;
+- curiosity reward-influence mode.
 
-## Evaluation isolation
+Events are observational only and cannot mutate the learner or archives.
 
-Curiosity reward remains absent from:
+## Save / branch persistence
 
-- `validation:v3` Champion selection;
-- `heldout:compare:v2` historical comparison;
-- `heldout:final:v2` final Unseen Test;
-- new `heldout:curiosity-ablation:v1` A/B evaluation.
+Schema 9 adds:
 
-A/B audit evaluation is observational and cannot mutate the Champion archive.
+- active-lineage stability capture history;
+- regression-event history;
+- next telemetry capture point.
 
-## Persistence / recovery
+Frozen learners also carry their own stability history/event stream. Schema-8 saves migrate with empty stability telemetry and otherwise preserve their exact v0.1.3.1 state.
 
-Schema 8 adds persistence for:
+## Compact iPhone UI
 
-- curiosity influence mode;
-- curiosity episode history/reset counters;
-- active A/B experiment state/results;
-- branch role and branch-local audit progress;
-- branch-specific recent episode history.
+To stop the research page growing indefinitely, secondary panels are collapsed by default and show compact live summaries in their headers. Opening a panel reveals the full existing content.
 
-Schema-7 v0.1.3 checkpoints migrate safely to reward-on/no-audit behavior. The current Learner is preserved before starting an audit, and the UI also saves the pre-audit state before creating descendants.
+The iPhone viewport regression is also addressed by:
 
-## Automated QA
+- 16px minimum mobile `select/input/textarea` font sizing to prevent Safari focus zoom;
+- strict panel/select width containment;
+- horizontal overflow prevention at phone widths;
+- no curiosity-canvas redraw while the Curiosity panel is collapsed.
 
-- `npm test`: **65/65 PASS**.
-- Observe-only predictor learning with exactly zero applied intrinsic reward: PASS.
-- Budget remaining/reset semantics: PASS.
-- Matched A/B descendant creation: PASS.
-- Champion non-promotion during audit: PASS.
-- Branch-specific reward mode/progress restore: PASS.
-- Equal PPO schedule age at equal branch-local progress: PASS.
-- Ordinary milestone and recent-return-window isolation: PASS.
-- Schema-8 active-audit roundtrip + schema-7 migration: PASS.
-- Existing PPO, Hall, Champion, continual-learning, evaluation-isolation, and final-heldout tests retained.
+## QA
+
+- `npm test`: **69/69 PASS**.
+- PPO diagnostic values finite/bounded: PASS.
+- Schema-9 telemetry roundtrip: PASS.
+- Schema-8 -> schema-9 migration: PASS.
+- Regression recording cannot mutate policy weights: PASS.
+- Compact panel/mobile-form safeguards: PASS.
+- Existing curiosity A/B, Hall, branching, Champion, continual-learning, evaluation isolation, and final-heldout tests retained.
+- Deterministic learning-state parity vs v0.1.3.1: PASS.
 - Built `dist/` HTTP resource smoke: PASS.
-- Full 100k+100k branch A/B execution smoke reached both targets and produced paired checkpoints: PASS (scores are not treated as scientific evidence).
-
-## Development performance smoke
-
-Headless Node performance workload after the audit changes:
-
-- wall-clock throughput: **45,824 steps/sec**;
-- last-profile simulation throughput: **142,403 steps/sec**;
-- last-profile PPO time: **3.47 ms**;
-- last-profile curiosity update time: **0.20 ms**.
-
-This is a development-machine smoke test, not an iPhone claim. Physical Safari remains the performance authority.
+- Development performance smoke: ~42.5k wall-clock steps/sec; latest profiled simulation ~146.3k steps/sec; PPO ~3.48 ms; curiosity update ~0.19 ms. These are development-machine numbers, not iPhone claims.
 
 ## Physical test procedure
 
-1. Deploy and verify `v0.1.3.1 • CURAUD-0131`.
-2. Load the intended current ~15M Learner and confirm the protected 6,050,304-step Champion/Hall entry still exists.
-3. Stay paused and confirm the Curiosity panel says `BUDGET REMAINING`.
-4. Press **Start Curiosity A/B Audit**. The exact current Learner is preserved and CONTROL becomes active first.
-5. Run CONTROL to its 2M branch-local target. It auto-pauses at completion; audit checkpoints appear at ~0.5M intervals.
-6. Switch to CURIOSITY and run the same 2M branch-local budget.
-7. Compare paired A/B results. Do not promote a winner from one noisy checkpoint; inspect the trajectory across paired checkpoints and confidence ranges.
-8. End the audit only after preserving the result you want to inspect. Ending does not automatically replace the Champion.
+1. Before deployment, keep a current Manual Save of the desired post-audit learner.
+2. Deploy and verify `v0.1.3.2 • STABOBS-0132`.
+3. Load the intended save; schema 8 should migrate to schema 9 and pause for verification.
+4. Confirm the same active lineage, Champion/Hall entries, frozen A/B Control branch, step count, and curiosity reward mode.
+5. Expand **PPO STABILITY** once and confirm values update while learning.
+6. Resume normal Learn. Do not fork or retune anything for this observation run.
+7. Let the same learner continue approximately **2–3 million steps**.
+8. If validation falls sharply, open PPO Stability and capture the latest validation delta + regression event. That is the evidence used to choose the next targeted stability experiment.

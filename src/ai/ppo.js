@@ -68,6 +68,7 @@ export class PPOTrainer {
     const dLogits = new Float64Array(CONFIG.model.actionSize);
     const dh = new Float64Array(CONFIG.model.hiddenSize);
     let accPolicy = 0, accValue = 0, accEntropy = 0, accKL = 0, clippedCount = 0, sampleCount = 0;
+    let gradNormSum = 0, gradNormMax = 0, gradClipBatches = 0, gradBatchCount = 0;
     let epochsRun = 0;
     let earlyStopped = false;
     let updateRejected = false;
@@ -143,7 +144,11 @@ export class PPOTrainer {
           epochSamples++;
           batchCount++;
         }
-        this.applyAdam(g, 1 / Math.max(1, batchCount));
+        const gradStats = this.applyAdam(g, 1 / Math.max(1, batchCount));
+        gradNormSum += gradStats.norm;
+        gradNormMax = Math.max(gradNormMax, gradStats.norm);
+        if (gradStats.clipScale < 0.999999) gradClipBatches++;
+        gradBatchCount++;
       }
 
       epochsRun++;
@@ -176,6 +181,8 @@ export class PPOTrainer {
     if (this.lrCooldownUpdates > 0) this.lrCooldownUpdates--;
 
     const denom = Math.max(1, sampleCount);
+    const parameterDelta = parameterDeltaStats(modelBefore, this.model.params);
+    const explainedVariance = explainedVarianceFromOldValues(transitions, returns);
     this.lastStats = {
       policyLoss: accPolicy / denom,
       valueLoss: accValue / denom,
@@ -188,6 +195,13 @@ export class PPOTrainer {
       clipFraction: clippedCount / denom,
       advantageMean: mean,
       advantageStd: sd,
+      explainedVariance,
+      gradientNormMean: gradNormSum / Math.max(1, gradBatchCount),
+      gradientNormMax: gradNormMax,
+      gradientClipFraction: gradClipBatches / Math.max(1, gradBatchCount),
+      parameterDeltaL2: parameterDelta.l2,
+      parameterRelativeDelta: parameterDelta.relative,
+      parameterMaxAbsDelta: parameterDelta.maxAbs,
       learningRate: this.learningRate,
       epochsRun,
       earlyStopped,
@@ -219,6 +233,7 @@ export class PPOTrainer {
         if (!Number.isFinite(p[i])) throw new Error(`Non-finite parameter ${k}[${i}]`);
       }
     }
+    return { norm, clipScale };
   }
 
   enterRecoveryCooldown(updates = CONFIG.ppo.lrRecoveryCooldownUpdates) {
@@ -252,6 +267,49 @@ export class PPOTrainer {
       if (data.v?.[k]?.length === this.v[k].length) this.v[k].set(data.v[k]);
     }
   }
+}
+
+function parameterDeltaStats(before, after) {
+  let deltaSq = 0;
+  let baseSq = 0;
+  let maxAbs = 0;
+  for (const key of Object.keys(after)) {
+    const a = after[key];
+    const b = before[key];
+    if (!a || !b || a.length !== b.length) continue;
+    for (let i = 0; i < a.length; i++) {
+      const d = a[i] - b[i];
+      deltaSq += d * d;
+      baseSq += b[i] * b[i];
+      maxAbs = Math.max(maxAbs, Math.abs(d));
+    }
+  }
+  const l2 = Math.sqrt(deltaSq);
+  return { l2, relative: l2 / Math.max(1e-12, Math.sqrt(baseSq)), maxAbs };
+}
+
+function explainedVarianceFromOldValues(transitions, returns) {
+  if (!transitions.length || transitions.length !== returns.length) return 0;
+  let meanTarget = 0;
+  let meanResidual = 0;
+  for (let i = 0; i < returns.length; i++) {
+    meanTarget += returns[i];
+    meanResidual += returns[i] - (Number(transitions[i]?.value) || 0);
+  }
+  meanTarget /= returns.length;
+  meanResidual /= returns.length;
+  let targetVar = 0;
+  let residualVar = 0;
+  for (let i = 0; i < returns.length; i++) {
+    const target = returns[i] - meanTarget;
+    const residual = (returns[i] - (Number(transitions[i]?.value) || 0)) - meanResidual;
+    targetVar += target * target;
+    residualVar += residual * residual;
+  }
+  targetVar /= returns.length;
+  residualVar /= returns.length;
+  if (!(targetVar > 1e-12)) return 0;
+  return 1 - residualVar / targetVar;
 }
 
 function entropyCoefficient(trainingStep) {

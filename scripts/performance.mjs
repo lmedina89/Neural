@@ -1,4 +1,5 @@
 import { TrainingSession } from '../src/ai/session.js';
+import { VERSION } from '../src/config.js';
 
 const seed = 539;
 const envCount = 8;
@@ -16,7 +17,7 @@ for (let i = 0; i < measured; i++) transitions += session.trainRollout(rollout).
 const ms = performance.now() - t0;
 const last = session.metrics.at(-1)?.profile || {};
 console.log(JSON.stringify({
-  version: '0.1.3.1',
+  version: VERSION,
   seed,
   envCount,
   curriculum: 'Scarcity',

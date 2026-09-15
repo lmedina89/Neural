@@ -1,5 +1,5 @@
-export const VERSION = '0.1.3.1';
-export const BUILD_MARKER = 'CURAUD-0131';
+export const VERSION = '0.1.3.2';
+export const BUILD_MARKER = 'STABOBS-0132';
 
 export const CONFIG = Object.freeze({
   world: {
@@ -74,6 +74,17 @@ export const CONFIG = Object.freeze({
     episodesPerStage: 8,
     checkpointInterval: 500_000,
     targetStepsPerBranch: 2_000_000,
+  },
+  stability: {
+    // Observational only. These settings control telemetry capture and regression
+    // annotation; they never change PPO, curriculum, curiosity, or policy weights.
+    captureIntervalSteps: 50_000,
+    historyPoints: 240,
+    eventHistory: 32,
+    validationBalancedDrop: 0.10,
+    validationSkillDrop: 0.15,
+    spikeWindow: 16,
+    spikeMultiplier: 3.0,
   },
   ppo: {
     gamma: 0.985,

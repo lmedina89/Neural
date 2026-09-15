@@ -27,6 +27,7 @@ const el = {
   lineage: $('lineageVal'), rehearsal: $('rehearsalVal'), promotion: $('promotionVal'),
   pinChampion: $('pinChampionBtn'), branchSelect: $('branchSelect'), switchBranch: $('switchBranchBtn'), hallOptions: $('hallBrainOptions'),
   experienceAge: $('experienceAgeVal'), researchLineage: $('researchLineageVal'), policyOrigin: $('policyOriginVal'), activeChampion: $('activeChampionVal'), hall: $('hallVal'), branches: $('branchesVal'), hallList: $('hallList'),
+  researchCompactSummary: $('researchCompactSummary'),
   simSpeed: $('simSpeedVal'), ppoMs: $('ppoMsVal'), fps: $('fpsVal'), uiMs: $('uiMsVal'), validationMs: $('validationMsVal'), storageMs: $('storageMsVal'),
   curiosityCanvas: $('curiosityCanvas'), curiosityError: $('curiosityErrorVal'), curiosityNovelty: $('curiosityNoveltyVal'), curiosityBonus: $('curiosityBonusVal'),
   curiosityBudget: $('curiosityBudgetVal'), curiosityLoss: $('curiosityLossVal'), curiosityParams: $('curiosityParamsVal'), curiosityInspect: $('curiosityInspect'),
@@ -35,6 +36,11 @@ const el = {
   curiosityMode: $('curiosityModeSelect'), startCuriosityAudit: $('startCuriosityAuditBtn'), switchCuriosityAudit: $('switchCuriosityAuditBtn'), endCuriosityAudit: $('endCuriosityAuditBtn'),
   curiosityAuditRole: $('curiosityAuditRoleVal'), curiosityControlProgress: $('curiosityControlProgressVal'), curiosityRewardProgress: $('curiosityRewardProgressVal'),
   curiosityPairCheckpoint: $('curiosityPairCheckpointVal'), curiosityControlScore: $('curiosityControlScoreVal'), curiosityRewardScore: $('curiosityRewardScoreVal'), curiosityAuditResults: $('curiosityAuditResults'),
+  curiosityCompactSummary: $('curiosityCompactSummary'), skillCompactSummary: $('skillCompactSummary'), resultsCompactSummary: $('resultsCompactSummary'),
+  stabilityCompactSummary: $('stabilityCompactSummary'), stabilityStatus: $('stabilityStatusVal'), stabilityPolicyLoss: $('stabilityPolicyLossVal'), stabilityValueLoss: $('stabilityValueLossVal'),
+  stabilityExplained: $('stabilityExplainedVal'), stabilityKl: $('stabilityKlVal'), stabilityClip: $('stabilityClipVal'), stabilityGrad: $('stabilityGradVal'), stabilityGradClip: $('stabilityGradClipVal'),
+  stabilityParamDelta: $('stabilityParamDeltaVal'), stabilityParamMax: $('stabilityParamMaxVal'), stabilityAdvantage: $('stabilityAdvantageVal'), stabilityRejected: $('stabilityRejectedVal'),
+  stabilityValidation: $('stabilityValidationText'), stabilityEvents: $('stabilityEventsText'),
 };
 $('buildTag').textContent = `v${VERSION} • ${BUILD_MARKER}`;
 
@@ -362,7 +368,7 @@ function frame(now) {
     worldRenderer.draw(viewWorld, mode + (paused ? ' • PAUSED' : ''), mode === 'LEARN' ? session.curiosityTrail : []);
     neuralRenderer.mode = el.brainView.value;
     neuralRenderer.draw(model, lastSnapshot);
-    if (now - lastCuriosityRender >= 1000 / Math.max(1, CONFIG.runtime.curiosityRenderHz)) {
+    if (el.curiosityCanvas.getBoundingClientRect().width > 1 && now - lastCuriosityRender >= 1000 / Math.max(1, CONFIG.runtime.curiosityRenderHz)) {
       lastCuriosityRender = now;
       curiosityRenderer.draw(session.curiosity, session.lastCuriosity);
     }
@@ -484,6 +490,24 @@ function updateUI() {
   el.switchCuriosityAudit.textContent = audit.active ? `Switch to ${audit.role === 'control' ? 'CURIOSITY' : 'CONTROL'}` : 'Switch A/B Branch';
   el.curiosityAuditResults.textContent = formatCuriosityAuditResults(audit);
 
+  const stability = session.stabilitySummary();
+  el.stabilityStatus.textContent = stability.status;
+  el.stabilityPolicyLoss.textContent = fmt(stability.policyLoss, 4);
+  el.stabilityValueLoss.textContent = fmt(stability.valueLoss, 4);
+  el.stabilityExplained.textContent = fmt(stability.explainedVariance, 3);
+  el.stabilityKl.textContent = fmt(stability.maxEpochKL, 5);
+  el.stabilityClip.textContent = Number.isFinite(stability.clipFraction) ? `${(stability.clipFraction * 100).toFixed(1)}%` : '—';
+  el.stabilityGrad.textContent = fmt(stability.gradientNormMax, 4);
+  el.stabilityGradClip.textContent = Number.isFinite(stability.gradientClipFraction) ? `${(stability.gradientClipFraction * 100).toFixed(0)}%` : '—';
+  el.stabilityParamDelta.textContent = Number.isFinite(stability.parameterRelativeDelta) ? stability.parameterRelativeDelta.toExponential(2) : '—';
+  el.stabilityParamMax.textContent = Number.isFinite(stability.parameterMaxAbsDelta) ? stability.parameterMaxAbsDelta.toExponential(2) : '—';
+  el.stabilityAdvantage.textContent = Number.isFinite(stability.advantageMean) && Number.isFinite(stability.advantageStd)
+    ? `${stability.advantageMean.toFixed(3)} / ${stability.advantageStd.toFixed(3)}` : '—';
+  el.stabilityRejected.textContent = Number(stability.rejectedUpdates || 0).toLocaleString();
+  el.stabilityCompactSummary.textContent = formatStabilityCompact(stability);
+  el.stabilityValidation.textContent = formatStabilityValidation(stability.lastValidationDeltas);
+  el.stabilityEvents.textContent = formatStabilityEvents(session.stabilityEvents);
+
 
   const hall = session.hallOfFameSummary();
   const branches = session.frozenLearnerSummary();
@@ -496,6 +520,9 @@ function updateUI() {
   el.hallList.textContent = hall.length
     ? hall.map(x => `${x.id} • ${Number(x.savedAtSteps || 0).toLocaleString()} • ${title(x.category || 'brain')} • ${x.lineage?.id || 'unknown lineage'}`).join('   |   ')
     : 'No pinned historic brains yet.';
+  el.researchCompactSummary.textContent = `${session.learnerLineage?.id || 'learner'} • Champion ${balancedBrain ? balancedBrain.savedAtSteps.toLocaleString() : 'none'} • Hall ${hall.length}`;
+  el.curiosityCompactSummary.textContent = `${session.curiosityRewardMode === 'reward' ? 'reward ON' : 'observe-only'} • error ${Number.isFinite(curiosityLive?.error) ? curiosityLive.error.toFixed(4) : '—'} • share ${Number.isFinite(curiosityMetric.rewardMagnitudeShare) ? `${(curiosityMetric.rewardMagnitudeShare * 100).toFixed(2)}%` : '—'}${audit.active ? ` • A/B ${String(audit.role || '').toUpperCase()}` : ''}`;
+  el.resultsCompactSummary.textContent = `learner ${lv ? pct(lv.validation.categoryScores?.balanced ?? lv.validation.score) : '—'} • Champion ${balancedBrain?.validation?.categoryScores ? pct(balancedBrain.validation.categoryScores.balanced) : '—'} • final holdout diagnostic only`;
 
   renderSkillRetention();
   chartRenderer.draw(session.metrics);
@@ -506,7 +533,7 @@ function updateUI() {
 
 function renderSkillRetention() {
   const validation = session.lastSkillValidation;
-  if (!validation?.stageResults?.length) { el.skillRetention.textContent = 'Waiting for autonomous continual-learning validation…'; return; }
+  if (!validation?.stageResults?.length) { el.skillRetention.textContent = 'Waiting for autonomous continual-learning validation…'; el.skillCompactSummary.textContent = 'waiting for validation'; return; }
   el.skillRetention.innerHTML = '';
   const alerts = new Map((session.retentionStatus?.alerts || session.retentionStatus?.forgetting || []).map(x => [x.stage, x]));
   for (const stage of validation.stageResults) {
@@ -522,6 +549,7 @@ function renderSkillRetention() {
     cell.innerHTML = `<b>${stage.name}</b><span>now ${pct(stage.skillScore)} [${nowRange}]</span><span>best ${pct(bestScore)} [${bestRange}]${tag}</span>`;
     el.skillRetention.append(cell);
   }
+  el.skillCompactSummary.textContent = validation.stageResults.map(x => `${x.name.replace('Obstacle Avoidance','Obstacle').replace('Motor Nursery','Motor')} ${pct(x.skillScore)}`).join(' • ');
 }
 function formatCuriosityAuditResults(audit) {
   if (!audit?.id) return 'Audit idle. Start it only after loading/saving the learner you want to preserve as the experiment origin.';
@@ -548,6 +576,38 @@ function formatCuriosityAuditResults(audit) {
 }
 
 function pct(x) { return `${(Math.max(0, Math.min(1, Number(x) || 0)) * 100).toFixed(0)}%`; }
+function fmt(x, digits = 3) { return Number.isFinite(Number(x)) ? Number(x).toFixed(digits) : '—'; }
+function signedPoints(x) {
+  if (!Number.isFinite(Number(x))) return '—';
+  const points = Number(x) * 100;
+  return `${points >= 0 ? '+' : ''}${points.toFixed(1)} pts`;
+}
+function formatStabilityCompact(stability) {
+  const pieces = [stability.status];
+  if (Number.isFinite(stability.maxEpochKL)) pieces.push(`KL ${stability.maxEpochKL.toFixed(4)}`);
+  if (Number.isFinite(stability.clipFraction)) pieces.push(`clip ${(stability.clipFraction * 100).toFixed(0)}%`);
+  if (Number.isFinite(stability.parameterRelativeDelta)) pieces.push(`Δw ${stability.parameterRelativeDelta.toExponential(1)}`);
+  if (stability.events) pieces.push(`${stability.events} regression event${stability.events === 1 ? '' : 's'}`);
+  return pieces.join(' • ');
+}
+function formatStabilityValidation(deltas) {
+  if (!deltas) return 'Waiting for two comparable validation checkpoints to calculate per-skill deltas.';
+  const skills = (deltas.skillDeltas || []).filter(x => Number.isFinite(x.delta)).map(x => `${x.name.replace('Obstacle Avoidance','Obstacle').replace('Motor Nursery','Motor')} ${signedPoints(x.delta)}`);
+  return `latest validation change • balanced ${signedPoints(deltas.balancedDelta)}${skills.length ? ` • ${skills.join(' • ')}` : ''}`;
+}
+function formatStabilityEvents(events) {
+  const rows = Array.isArray(events) ? events.slice(-4).reverse() : [];
+  if (!rows.length) return 'No large validation regression event captured yet.';
+  return rows.map(event => {
+    const skill = event.largestSkillDrop && Number.isFinite(event.largestSkillDrop.delta)
+      ? ` • ${event.largestSkillDrop.name.replace('Obstacle Avoidance','Obstacle')} ${signedPoints(event.largestSkillDrop.delta)}` : '';
+    const ppo = event.ppo || {};
+    const kl = Number.isFinite(ppo.maxEpochKL) ? ` • KL ${ppo.maxEpochKL.toFixed(4)}` : '';
+    const clip = Number.isFinite(ppo.clipFraction) ? ` • clip ${(ppo.clipFraction * 100).toFixed(0)}%` : '';
+    const delta = Number.isFinite(ppo.parameterRelativeDelta) ? ` • Δw ${ppo.parameterRelativeDelta.toExponential(1)}` : '';
+    return `${Number(event.atSteps || 0).toLocaleString()} • ${String(event.trigger || 'regression').replaceAll('-', ' ')} • balanced ${signedPoints(event.balancedDelta)}${skill}${kl}${clip}${delta}`;
+  }).join('\n');
+}
 function retentionLabel(status) {
   const label = String(status?.interpretation || 'unvalidated').replaceAll('-', ' ').toUpperCase();
   const alerts = status?.alerts?.length || status?.forgetting?.length || 0;
