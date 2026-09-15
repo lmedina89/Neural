@@ -10,6 +10,49 @@ const wrapAngle = (a) => {
 };
 const dist = (a, b) => Math.hypot(a.x - b.x, a.y - b.y);
 
+function pointRectDistance(p, w) {
+  const cx = clamp(p.x, w.x, w.x + w.w);
+  const cy = clamp(p.y, w.y, w.y + w.h);
+  return Math.hypot(p.x - cx, p.y - cy);
+}
+
+function hasWorldClearance(p, entityRadius, walls, margin = CONFIG.world.wallMargin) {
+  const clearance = entityRadius + margin;
+  if (p.x < clearance || p.x > 1 - clearance || p.y < clearance || p.y > 1 - clearance) return false;
+  return walls.every(w => pointRectDistance(p, w) >= clearance);
+}
+
+function separatedFromOccupied(p, occupied, radius) {
+  return occupied.every(o => Math.hypot(p.x - o.x, p.y - o.y) > radius + (o.r ?? 0.04));
+}
+
+function correctiveClearPoint(rng, occupied, separationRadius, entityRadius, walls, tries = 160) {
+  const clearance = entityRadius + CONFIG.world.wallMargin;
+  const lo = Math.max(0.08, clearance);
+  const hi = Math.min(0.92, 1 - clearance);
+  for (let i = 0; i < tries; i++) {
+    const p = { x: rng.range(lo, hi), y: rng.range(lo, hi) };
+    if (separatedFromOccupied(p, occupied, separationRadius) && hasWorldClearance(p, entityRadius, walls)) return p;
+  }
+
+  // Deterministic center-out fallback. This should be rare, but unlike the old
+  // clearPoint fallback it never silently returns a point inside a wall.
+  const grid = 21;
+  const points = [];
+  for (let iy = 0; iy < grid; iy++) {
+    for (let ix = 0; ix < grid; ix++) {
+      const x = lo + (hi - lo) * (ix + 0.5) / grid;
+      const y = lo + (hi - lo) * (iy + 0.5) / grid;
+      points.push({ x, y, d2: (x - 0.5) ** 2 + (y - 0.5) ** 2 });
+    }
+  }
+  points.sort((a, b) => a.d2 - b.d2 || a.y - b.y || a.x - b.x);
+  for (const p of points) {
+    if (separatedFromOccupied(p, occupied, separationRadius) && hasWorldClearance(p, entityRadius, walls)) return { x: p.x, y: p.y };
+  }
+  throw new Error('Unable to find valid world spawn point');
+}
+
 function clearPoint(rng, occupied, radius = 0.08, tries = 100) {
   for (let i = 0; i < tries; i++) {
     const p = { x: rng.range(0.08, 0.92), y: rng.range(0.08, 0.92) };
@@ -58,8 +101,52 @@ export class World {
       const h = horizontal ? this.rng.range(0.035, 0.06) : this.rng.range(0.14, 0.25);
       this.walls.push({ x: this.rng.range(0.15, 0.85 - w), y: this.rng.range(0.15, 0.85 - h), w, h });
     }
+
+    // Walls are generated after the entities so legacy-valid seeds retain their
+    // exact geometry. Only a genuinely tight/invalid spawn is corrected here.
+    this.correctSpawnClearance();
     this.prevFoodDist = this.nearestFoodDistance();
     return this.observe();
+  }
+
+  correctSpawnClearance() {
+    const cfg = CONFIG.world;
+    const occupancy = (skipType = '', skipIndex = -1) => {
+      const out = [];
+      if (skipType !== 'agent') out.push({ x: this.agent.x, y: this.agent.y, r: 0.09 });
+      for (let i = 0; i < this.food.length; i++) if (!(skipType === 'food' && i === skipIndex)) {
+        out.push({ x: this.food[i].x, y: this.food[i].y, r: 0.07 });
+      }
+      for (let i = 0; i < this.hazards.length; i++) if (!(skipType === 'hazard' && i === skipIndex)) {
+        const h = this.hazards[i];
+        out.push({ x: h.x, y: h.y, r: h.r + 0.05 });
+      }
+      return out;
+    };
+
+    if (!hasWorldClearance(this.agent, cfg.agentRadius, this.walls)) {
+      const p = correctiveClearPoint(this.rng, occupancy('agent'), 0.12, cfg.agentRadius, this.walls);
+      this.agent.x = p.x;
+      this.agent.y = p.y;
+    }
+
+    for (let i = 0; i < this.food.length; i++) {
+      const f = this.food[i];
+      if (!hasWorldClearance(f, f.r, this.walls)) {
+        const p = correctiveClearPoint(this.rng, occupancy('food', i), 0.11, f.r, this.walls);
+        f.x = p.x;
+        f.y = p.y;
+      }
+    }
+
+    for (let i = 0; i < this.hazards.length; i++) {
+      const h = this.hazards[i];
+      if (!hasWorldClearance(h, h.r, this.walls)) {
+        const p = correctiveClearPoint(this.rng, occupancy('hazard', i), 0.14, h.r, this.walls);
+        h.x = p.x;
+        h.y = p.y;
+      }
+    }
   }
 
   nearestFood() {
@@ -167,7 +254,11 @@ export class World {
         rewardParts.food += rw.food; reward += rw.food;
         this.foodCollected++;
         ate = true;
-        const q = clearPoint(this.rng, [{x:a.x,y:a.y,r:0.12}, ...this.hazards], 0.12);
+        const occupiedForFood = [{x:a.x,y:a.y,r:0.12}, ...this.hazards];
+        let q = clearPoint(this.rng, occupiedForFood, 0.12);
+        if (!hasWorldClearance(q, CONFIG.world.foodRadius, this.walls)) {
+          q = correctiveClearPoint(this.rng, [...occupiedForFood, ...this.food], 0.12, CONFIG.world.foodRadius, this.walls);
+        }
         this.food.push({ ...q, r: CONFIG.world.foodRadius });
       }
     }

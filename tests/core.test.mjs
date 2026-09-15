@@ -14,10 +14,46 @@ import { evaluateCurriculumSuite, evaluateFullRetentionSuite, evaluateHeldoutGen
 import { projectHiddenState } from '../src/visualization/memoryRenderer.js';
 import { buildHistoryScene } from '../src/visualization/historyRenderer.js';
 
-test('release identity is v0.1.4.0.1 Visualization Performance Hotfix',()=>{assert.equal(VERSION,'0.1.4.0.1');assert.equal(BUILD_MARKER,'VISPERF-01401')});
+test('release identity is v0.1.4.0.2 Spawn Clearance & World Validity Hotfix',()=>{assert.equal(VERSION,'0.1.4.0.2');assert.equal(BUILD_MARKER,'SPAWNCLR-01402')});
 test('PRNG is repeatable',()=>{const a=new PRNG(123),b=new PRNG(123);for(let i=0;i<100;i++)assert.equal(a.nextUint(),b.nextUint())});
 test('training, validation, comparison, curiosity-audit and final-holdout seed domains are separated',()=>{const domains=['train',CONFIG.validation.seedBase,CONFIG.generalization.compareSeedBase,CONFIG.curiosityAudit.seedBase,CONFIG.generalization.seedBase];const seeds=domains.map(x=>domainSeed(x,0));assert.equal(new Set(seeds).size,seeds.length)});
 test('world generation is deterministic',()=>{const a=new World(77,CURRICULUM[2]),b=new World(77,CURRICULUM[2]);assert.deepEqual(a.food,b.food);assert.deepEqual(a.hazards,b.hazards);assert.deepEqual(a.walls,b.walls);assert.deepEqual(Array.from(a.observe()),Array.from(b.observe()))});
+test('legacy-valid seed geometry is unchanged by corrective spawn clearance',()=>{
+  const w=new World(77,CURRICULUM[2]);
+  assert.deepEqual({agent:w.agent,food:w.food,hazards:w.hazards,walls:w.walls},{
+    agent:{x:0.43750513881444936,y:0.11546459655277432,vx:0,vy:0,angle:1.2315466043679555,omega:0,energy:1},
+    food:[{x:0.7739308758825064,y:0.8218447378464043,r:0.035},{x:0.7385559266898781,y:0.12701161314733328,r:0.035}],
+    hazards:[{x:0.23182738048024476,y:0.8437525554653258,r:0.05638465300633106},{x:0.49656747081317015,y:0.6590669780503958,r:0.053714828744414266}],
+    walls:[{x:0.42567128468602977,y:0.42951874125662093,w:0.03825735151418485,h:0.14823154198238628},{x:0.2881268523869061,y:0.23953033883429078,w:0.14632758107502014,h:0.042206191745353866}],
+  });
+});
+
+test('known trapped spawn seed is deterministically corrected away from walls',()=>{
+  const a=new World(2,CURRICULUM[3]),b=new World(2,CURRICULUM[3]);
+  assert.deepEqual(a.agent,b.agent);
+  const margin=CONFIG.world.agentRadius+CONFIG.world.wallMargin;
+  for(const wall of a.walls){
+    const cx=Math.max(wall.x,Math.min(a.agent.x,wall.x+wall.w));
+    const cy=Math.max(wall.y,Math.min(a.agent.y,wall.y+wall.h));
+    assert.ok(Math.hypot(a.agent.x-cx,a.agent.y-cy)>=margin-1e-12);
+  }
+});
+
+test('thousands of generated worlds keep agent, food and hazards clear of walls and boundaries',()=>{
+  const rectDistance=(p,w)=>{const cx=Math.max(w.x,Math.min(p.x,w.x+w.w));const cy=Math.max(w.y,Math.min(p.y,w.y+w.h));return Math.hypot(p.x-cx,p.y-cy)};
+  const clear=(p,r,w)=>{const c=r+CONFIG.world.wallMargin;assert.ok(p.x>=c-1e-12&&p.x<=1-c+1e-12&&p.y>=c-1e-12&&p.y<=1-c+1e-12);for(const wall of w.walls)assert.ok(rectDistance(p,wall)>=c-1e-12)};
+  for(let seed=0;seed<2000;seed++)for(const stage of CURRICULUM){const w=new World(seed,stage);clear(w.agent,CONFIG.world.agentRadius,w);for(const f of w.food)clear(f,f.r,w);for(const h of w.hazards)clear(h,h.r,w)}
+});
+
+test('food respawn also remains clear of walls',()=>{
+  const rectDistance=(p,w)=>{const cx=Math.max(w.x,Math.min(p.x,w.x+w.w));const cy=Math.max(w.y,Math.min(p.y,w.y+w.h));return Math.hypot(p.x-cx,p.y-cy)};
+  for(let seed=0;seed<160;seed++){
+    const w=new World(seed,CURRICULUM[3]);
+    const f=w.food[0]; w.agent.x=f.x; w.agent.y=f.y; w.agent.vx=0; w.agent.vy=0; w.step(0);
+    const c=CONFIG.world.foodRadius+CONFIG.world.wallMargin;
+    for(const food of w.food)for(const wall of w.walls)assert.ok(rectDistance(food,wall)>=c-1e-12);
+  }
+});
 test('world info carries curriculum identity',()=>{const w=new World(7,CURRICULUM[2]);assert.equal(w.info().stageId,2);assert.equal(w.info().stageName,'Obstacle Avoidance')});
 test('observations are finite and correct shape',()=>{const w=new World(5,CURRICULUM[0]);const o=w.observe();assert.equal(o.length,10);for(const x of o)assert.ok(Number.isFinite(x))});
 test('all actions produce finite rewards',()=>{for(let a=0;a<7;a++){const w=new World(10+a,CURRICULUM[1]);const r=w.step(a);assert.ok(Number.isFinite(r.reward));assert.equal(r.obs.length,10)}});
@@ -44,7 +80,7 @@ test('schema-2 save migration preserves old protected best and schedules immedia
 test('schema-1 long-run migration snapshots exact loaded brain and does not backfill fake milestones',()=>{const a=new TrainingSession({seed:44,envCount:2,autoCurriculum:false});const snap=a.snapshot();const steps=2_122_848;const legacy={schema:1,seed:snap.seed,totalSteps:steps,totalEpisodes:3000,envSeedCursor:snap.envSeedCursor,curriculum:{stage:2,history:[]},model:snap.model,optimizer:snap.optimizer,metrics:[],milestones:snap.milestones};const b=new TrainingSession({seed:45,envCount:2,autoCurriculum:false});b.restore(legacy);assert.equal(b.nextMilestoneStep,2_250_000);assert.ok(b.milestones.has(steps));assert.equal(b.milestones.has(1_250_000),false);assert.equal(b.nextValidationStep,b.totalSteps)});
 
 test('reward is decomposed into finite named components',()=>{const w=new World(12345,CURRICULUM[1]);const r=w.step(1);const parts=r.info.rewardParts;for(const k of ['survival','energy','wall','food','hazard','approach','death'])assert.ok(Number.isFinite(parts[k]),k)});
-test('v0.1.4.0.1 UI preserves Hall, branching, performance, lineage, rehearsal and curiosity-audit diagnostics',async()=>{const html=await readFile(new URL('../index.html',import.meta.url),'utf8');for(const id of ['brainSource','hallBrainOptions','bestOption','overallOption','foragerOption','survivorOption','efficiencyOption','pinChampionBtn','restoreBestBtn','branchSelect','switchBranchBtn','researchLineageVal','policyOriginVal','hallVal','branchesVal','hallList','skillRetention','lrVal','klVal','epochsVal','retentionAlert','lineageVal','rehearsalVal','promotionVal','simSpeedVal','ppoMsVal','fpsVal','uiMsVal','validationMsVal','storageMsVal','curiosityInfluenceVal','curiosityAppliedVal','curiosityShareVal','curiosityResetsVal','curiosityBudgetUseVal','curiosityExhaustVal','curiosityModeSelect','startCuriosityAuditBtn','switchCuriosityAuditBtn','endCuriosityAuditBtn','curiosityAuditResults'])assert.match(html,new RegExp(`id="${id}"`));assert.match(html,/v0\.1\.4\.0\.1/);assert.match(html,/Fork New Learner/);assert.match(html,/Hall of Fame/);assert.match(html,/Adaptive/);assert.match(html,/observational only/);assert.match(html,/final holdout only diagnoses/)});
+test('v0.1.4.0.2 UI preserves Hall, branching, performance, lineage, rehearsal and curiosity-audit diagnostics',async()=>{const html=await readFile(new URL('../index.html',import.meta.url),'utf8');for(const id of ['brainSource','hallBrainOptions','bestOption','overallOption','foragerOption','survivorOption','efficiencyOption','pinChampionBtn','restoreBestBtn','branchSelect','switchBranchBtn','researchLineageVal','policyOriginVal','hallVal','branchesVal','hallList','skillRetention','lrVal','klVal','epochsVal','retentionAlert','lineageVal','rehearsalVal','promotionVal','simSpeedVal','ppoMsVal','fpsVal','uiMsVal','validationMsVal','storageMsVal','curiosityInfluenceVal','curiosityAppliedVal','curiosityShareVal','curiosityResetsVal','curiosityBudgetUseVal','curiosityExhaustVal','curiosityModeSelect','startCuriosityAuditBtn','switchCuriosityAuditBtn','endCuriosityAuditBtn','curiosityAuditResults'])assert.match(html,new RegExp(`id="${id}"`));assert.match(html,/v0\.1\.4\.0\.2/);assert.match(html,/Fork New Learner/);assert.match(html,/Hall of Fame/);assert.match(html,/Adaptive/);assert.match(html,/observational only/);assert.match(html,/final holdout only diagnoses/)});
 
 test('skill-regression evidence is watch-first and confirmed only on repeat',()=>{const stages=[{stage:0,name:'Motor Nursery',skillScore:.33,skillCiLow:.25,skillCiHigh:.41}];const best=[{stage:0,name:'Motor Nursery',score:.74,ciLow:.66,ciHigh:.82,atSteps:1000},null,null,null];const a=assessSkillRetention(stages,best,[0,0,0,0]);assert.equal(a.alerts.length,1);assert.equal(a.alerts[0].severity,'catastrophic');assert.equal(a.alerts[0].confirmed,false);const b=assessSkillRetention(stages,best,a.streaks);assert.equal(b.alerts[0].confirmed,true);assert.equal(b.alerts[0].streak,2)});
 test('final held-out generalization suite is all-skills and isolated from validation',()=>{const m=new RecurrentActorCritic(77);const r=evaluateHeldoutGeneralizationSuite(m,{episodesPerStage:2,seedBase:'heldout:final:test'});assert.equal(r.stageResults.length,CURRICULUM.length);assert.equal(r.episodes,2*CURRICULUM.length);assert.match(r.protocol,/heldout-generalization-v2/);assert.doesNotMatch(r.protocol,/validation:v3/)});
@@ -514,7 +550,7 @@ test('Prediction Echo and Attention Fields are real-data overlays with compact w
   assert.match(css,/worldHeadControls/);
 });
 
-test('v0.1.4.0.1 remains visual-only and keeps the accepted learning constants and schema',async()=>{
+test('spawn-clearance hotfix keeps the accepted policy, PPO, curiosity, curriculum constants and schema',async()=>{
   const config=await readFile(new URL('../src/config.js',import.meta.url),'utf8');
   const session=await readFile(new URL('../src/ai/session.js',import.meta.url),'utf8');
   assert.match(config,/obsSize: 10/);assert.match(config,/hiddenSize: 24/);assert.match(config,/actionSize: 7/);
@@ -576,7 +612,7 @@ test('Cognitive Observatory memory and history renderers use real recurrent/hist
 });
 
 
-test('v0.1.4.0.1 sleeps expensive canvases when they are off-screen without lowering visual render rates',async()=>{
+test('off-screen visualization performance hotfix remains intact in v0.1.4.0.2',async()=>{
   const main=await readFile(new URL('../src/app/main.js',import.meta.url),'utf8');
   const config=await readFile(new URL('../src/config.js',import.meta.url),'utf8');
   assert.match(main,/IntersectionObserver/);

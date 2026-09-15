@@ -1,36 +1,42 @@
-# MicroMind v0.1.4.0.1 — Mobile Visualization Performance Hotfix
+# MicroMind v0.1.4.0.2 — Spawn Clearance & World Validity Hotfix
 
-**Build:** `VISPERF-01401`  
-**Parent:** v0.1.4.0 `COGOBS-0140`
+**Build:** `SPAWNCLR-01402`  
+**Parent:** v0.1.4.0.1 `VISPERF-01401`
 
-This is a rendering-performance hotfix for the Cognitive Observatory. It does **not** change how MicroMind learns or what the existing visualizations look like while they are on screen.
+This is a narrowly scoped world-generation hotfix for the case where the bot can begin an episode touching or effectively trapped against a newly generated wall. It keeps the current three danger rays and does **not** add scripted escape behavior.
 
 ## What changed
 
-- Heavy canvases now use viewport visibility tracking. When a canvas is scrolled fully off-screen, it keeps its last rendered frame but stops consuming repeated draw work until it comes back into view.
-- LIVE world and Cognitive Flow are gated independently, so scrolling to the Training card no longer keeps both large canvases repainting in the background.
-- Predict World, curiosity network, Memory Constellation, History, and the return chart receive the same off-screen sleep behavior.
-- Cognitive Flow caches its stable node/curve geometry and reuses edge objects. Each visible frame still refreshes the **real current weights and activations**, sorts them the same way, and draws the same visual paths/effects.
-- Expensive cognitive-FX preparation is skipped entirely when the active visual canvases are off-screen.
+- Walls are still generated in the same order and with the same seeded RNG as before.
+- After generation, agent, food, and hazard geometry is checked against the existing `world.wallMargin` safety clearance.
+- A point that is already valid is left exactly where the legacy generator placed it.
+- Only a tight/invalid point is deterministically relocated with the same seeded PRNG and the existing entity-separation rules.
+- A deterministic center-out fallback guarantees the correction never silently returns a point inside a wall.
+- Food created after collection receives the same wall-clearance validation, so a respawn cannot appear inside/tight against a wall.
 
 ## Deliberately unchanged
 
-- policy architecture and parameters
-- PPO implementation and hyperparameters
-- curiosity predictor/reward behavior
-- world physics and rewards
-- curriculum/rehearsal
-- validation and Champion/Hall rules
+- 3-ray perception layout (`danger L / F / R`)
+- observation size (10), hidden size (24), action size (7)
+- policy / PPO / curiosity math and parameters
+- reward values and collision response
+- curriculum / rehearsal distribution
+- Champion, Hall of Fame, lineage and A/B behavior
+- validation / held-out protocols
+- Cognitive Observatory visuals and the v0.1.4.0.1 off-screen rendering optimization
 - save schema (`9`)
-- render-rate settings and visual effect settings
-- Cognitive Observatory layout, colors, glow, connection count, halo, attention field, prediction echo, Memory Constellation and History appearance
 
-## iPhone test
+## Compatibility / determinism
 
-1. Load the real Manual Save and verify lineage / Champion / step count.
-2. In LIVE, leave World + Cognitive Flow visible and note FPS/throughput. Visual appearance should match v0.1.4.0.
-3. Scroll down until both large canvases are fully off-screen while remaining in LIVE. Training throughput should recover because their drawing and cognitive-FX preparation are asleep.
-4. Scroll back up. Rendering should resume automatically with no button press and no visual downgrade.
-5. Repeat with PREDICT / MEMORY / HISTORY. Only the visible active canvas should perform heavy drawing.
+This patch is intentionally minimal: legacy-valid worlds retain their exact original entity and wall geometry. Seeds that produced unfair geometry change only because the invalid entity is corrected after wall generation. That is the intended behavior.
 
-The scientific roadmap remains v0.1.4.1 Validation Confidence & True Regression Audit after this hotfix.
+## iPhone acceptance test
+
+1. Deploy and confirm `v0.1.4.0.2 • SPAWNCLR-01402`.
+2. Load the real Manual Save and verify Learner lineage, Champion and step count.
+3. Let Scarcity / Obstacle worlds cycle for a while in Observe or Learn.
+4. Confirm the bot no longer begins intersecting or pressed tightly against a wall.
+5. Confirm the same three front danger rays, Cognitive Flow, Attention/Echo, Memory and History visuals still behave normally.
+6. Training throughput should remain in the same range as v0.1.4.0.1 after the visual warm-up/off-screen optimization takes effect.
+
+The planned scientific milestone after this hotfix remains **v0.1.4.1 — Validation Confidence & True Regression Audit**.
