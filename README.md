@@ -1,71 +1,85 @@
-# MicroMind v0.1.3.4 — Prediction Echo & Attention Fields
+# MicroMind v0.1.4.0 — Cognitive Observatory
 
-MicroMind is a browser-based miniature AI research lab. A real **1,040-parameter recurrent actor-critic** learns with PPO in procedural worlds while its policy, recurrent state, decisions, rewards, Champion history, stability telemetry, and separate **441-parameter curiosity predictor** can be inspected live.
+**Build:** `COGOBS-0140`  
+**Parent:** v0.1.3.4 `PREDATTN-0134`  
+**Save schema:** 9 (unchanged)
 
-**Build:** `PREDATTN-0134`  
-**Save schema:** 9
+MicroMind v0.1.4.0 is a visualization/navigation milestone. It does **not** change how the agent learns. The policy, PPO implementation, curiosity learner, curriculum, world physics, evaluator, checkpoint system, Champion/Hall behavior, and PRNG are preserved from v0.1.3.4.
 
-## What this release changes
+## What changed
 
-v0.1.3.4 is another **visualization-only milestone** on top of v0.1.3.3 Neural Flow & Cognitive FX.
+### Five-view Cognitive Observatory
+The long single-page laboratory is split into compact views:
 
-The World panel now has a compact cognitive-overlay selector:
+- **LIVE** — World, Cognitive Flow brain, training metrics, decisions.
+- **PREDICT** — Prediction Echo/Attention stage plus curiosity predictor diagnostics.
+- **MEMORY** — real recurrent-state Memory Constellation.
+- **HISTORY** — Learning Timeline plus Brain Lineage map.
+- **RESEARCH** — PPO stability, retention, evaluation, save/research details.
 
-- **Attention + Echo** (default)
-- **Attention Field**
-- **Prediction Echo**
-- **Clean World**
+Only the active heavy canvas view is rendered. This keeps the page shorter and avoids animating hidden canvases on mobile.
 
-### Attention Field
+### Memory Constellation
+The active policy's real 24-value recurrent hidden state is sampled into a bounded **320-point runtime ring buffer**. A fixed deterministic projection maps those states into a 2D state-space view; similar internal states tend to occupy nearby regions without training another model or consuming RNG state.
 
-Real sensory influence from the running policy is projected back into the simulated world:
+The constellation shows:
 
-- food influence creates a cyan/green light field and salience path around the nearest real food;
-- danger influence brightens the real three danger rays and their sensed contact regions;
-- energy influence adds a restrained violet pressure ring around the agent;
-- the existing decision/confidence/novelty cues remain tied to actual policy outputs.
+- recent recurrent-state trajectory,
+- activation/activity intensity,
+- action-colored state points,
+- current-state halo,
+- real novelty/reward/danger events,
+- **Experience Ripples** emitted by those events.
 
-The overlay is strictly read-only. It does not alter observations, rewards, actions, physics, or learning.
+The runtime constellation intentionally is **not added to checkpoint schema 9**. It is observational telemetry for the current browser session and resets on reload or lineage replacement. That keeps existing saves byte-compatible and prevents visualization history from bloating checkpoints.
 
-### Prediction Echo
+### Learning Timeline + Brain Lineage
+The History view reconstructs the agent's training story from data already saved by MicroMind:
 
-The curiosity forward model now gets a separate **Echo Lens** inside the World view.
+- validation history,
+- current balanced score,
+- Champion archive positions,
+- Hall-of-Fame entries,
+- learner lineage history,
+- frozen branches / A/B descendants.
 
-The lens visualizes one genuine sampled env-0 transition in agent-local sensor space:
+Tapping a timeline or lineage node shows its step, score (when available), and lineage information. The renderer is read-only.
 
-- **gold / hollow** markers = the forward model's predicted next sensory state;
-- **cyan / filled** markers = the actual next sensory state;
-- food x/y become paired vector markers;
-- the three danger channels become paired proximity markers on fixed local sensor rays;
-- speed, turn-rate and energy mismatch appear as short orbit arcs;
-- the lens halo strength follows real predictor error and novelty.
+## Safety / scientific constraints
 
-The Echo Lens intentionally lives in sensor space rather than pretending an older sampled training transition is the current physical world position at high training speed.
+v0.1.4.0 does **not** modify:
 
-## Learning behavior is unchanged
+- 1,040-parameter recurrent actor-critic architecture,
+- 441-parameter curiosity predictor architecture,
+- PPO clip / learning rate / gradient guard,
+- curiosity reward scale or 0.25 episode budget,
+- continual rehearsal mix,
+- validation protocol or Champion promotion rules,
+- save schema (still 9),
+- autonomous learner weights through any visualization action.
 
-The following learning-critical files are byte-for-byte identical to v0.1.3.3 `NEURAFX-0133`:
+The AI/simulation/evaluation/storage source files are byte-for-byte identical to v0.1.3.4. Only release identity plus app/visualization/UI files changed.
 
-- `src/ai/model.js`
-- `src/ai/ppo.js`
-- `src/ai/rollout.js`
-- `src/ai/session.js`
-- `src/ai/curiosity.js`
-- `src/sim/world.js`
-- `src/sim/curriculum.js`
-- `src/evaluation/evaluator.js`
-- `src/storage/checkpoints.js`
-- `src/utils/prng.js`
+## QA
 
-So this release does **not** retune PPO, curiosity, rewards, curriculum/rehearsal, Champion logic, evaluation, branch behavior, or saves.
+- `npm test`: **77/77 pass**
+- `npm run check`: pass
+- `npm run benchmark`: pass
+- `npm run performance`: pass
+- exact deterministic continuation parity against v0.1.3.4 after 3,840 training steps: **policy, optimizer, curiosity predictor, curriculum, rehearsal state all identical**
+- protected AI/sim/evaluation/storage/PRNG source hash parity against v0.1.3.4: **all exact**
+- JS syntax check: pass
+- root/dist key-file parity: pass
 
-## Run locally
+## Recommended physical iPhone test
 
-```bash
-npm test
-npm run performance
-npm run build
-python3 -m http.server 8080 --directory dist
-```
+1. Deploy the repo-root ZIP.
+2. Verify `v0.1.4.0 • COGOBS-0140`.
+3. **Load the real Manual Save** before training if a disposable visual-test brain is currently active.
+4. Verify learner lineage, Champion, Hall, and step count.
+5. Tap through LIVE → PREDICT → MEMORY → HISTORY → RESEARCH.
+6. Let LEARN run with MEMORY visible for 30–60 seconds and confirm the constellation fills, trails move, and occasional real event ripples appear.
+7. Open HISTORY and confirm validation/Champion/branch nodes reflect the loaded save.
+8. Return to LIVE and compare training throughput with heavy views hidden.
 
-GitHub Pages can serve the repository root directly.
+The next scientific milestone remains validation-confidence work; v0.1.4.0 deliberately does not attempt to fix the learning instability yet.

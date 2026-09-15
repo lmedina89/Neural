@@ -11,8 +11,10 @@ import { CuriosityModule } from '../src/ai/curiosity.js';
 import { computeGAE } from '../src/ai/rollout.js';
 import { TrainingSession, nextHistoricalMilestoneAfter, assessSkillRetention } from '../src/ai/session.js';
 import { evaluateCurriculumSuite, evaluateFullRetentionSuite, evaluateHeldoutGeneralizationSuite, generalizationDiagnostic } from '../src/evaluation/evaluator.js';
+import { projectHiddenState } from '../src/visualization/memoryRenderer.js';
+import { buildHistoryScene } from '../src/visualization/historyRenderer.js';
 
-test('release identity is v0.1.3.4 prediction echo and attention fields',()=>{assert.equal(VERSION,'0.1.3.4');assert.equal(BUILD_MARKER,'PREDATTN-0134')});
+test('release identity is v0.1.4.0 Cognitive Observatory',()=>{assert.equal(VERSION,'0.1.4.0');assert.equal(BUILD_MARKER,'COGOBS-0140')});
 test('PRNG is repeatable',()=>{const a=new PRNG(123),b=new PRNG(123);for(let i=0;i<100;i++)assert.equal(a.nextUint(),b.nextUint())});
 test('training, validation, comparison, curiosity-audit and final-holdout seed domains are separated',()=>{const domains=['train',CONFIG.validation.seedBase,CONFIG.generalization.compareSeedBase,CONFIG.curiosityAudit.seedBase,CONFIG.generalization.seedBase];const seeds=domains.map(x=>domainSeed(x,0));assert.equal(new Set(seeds).size,seeds.length)});
 test('world generation is deterministic',()=>{const a=new World(77,CURRICULUM[2]),b=new World(77,CURRICULUM[2]);assert.deepEqual(a.food,b.food);assert.deepEqual(a.hazards,b.hazards);assert.deepEqual(a.walls,b.walls);assert.deepEqual(Array.from(a.observe()),Array.from(b.observe()))});
@@ -42,7 +44,7 @@ test('schema-2 save migration preserves old protected best and schedules immedia
 test('schema-1 long-run migration snapshots exact loaded brain and does not backfill fake milestones',()=>{const a=new TrainingSession({seed:44,envCount:2,autoCurriculum:false});const snap=a.snapshot();const steps=2_122_848;const legacy={schema:1,seed:snap.seed,totalSteps:steps,totalEpisodes:3000,envSeedCursor:snap.envSeedCursor,curriculum:{stage:2,history:[]},model:snap.model,optimizer:snap.optimizer,metrics:[],milestones:snap.milestones};const b=new TrainingSession({seed:45,envCount:2,autoCurriculum:false});b.restore(legacy);assert.equal(b.nextMilestoneStep,2_250_000);assert.ok(b.milestones.has(steps));assert.equal(b.milestones.has(1_250_000),false);assert.equal(b.nextValidationStep,b.totalSteps)});
 
 test('reward is decomposed into finite named components',()=>{const w=new World(12345,CURRICULUM[1]);const r=w.step(1);const parts=r.info.rewardParts;for(const k of ['survival','energy','wall','food','hazard','approach','death'])assert.ok(Number.isFinite(parts[k]),k)});
-test('v0.1.3.4 UI preserves Hall, branching, performance, lineage, rehearsal and curiosity-audit diagnostics',async()=>{const html=await readFile(new URL('../index.html',import.meta.url),'utf8');for(const id of ['brainSource','hallBrainOptions','bestOption','overallOption','foragerOption','survivorOption','efficiencyOption','pinChampionBtn','restoreBestBtn','branchSelect','switchBranchBtn','researchLineageVal','policyOriginVal','hallVal','branchesVal','hallList','skillRetention','lrVal','klVal','epochsVal','retentionAlert','lineageVal','rehearsalVal','promotionVal','simSpeedVal','ppoMsVal','fpsVal','uiMsVal','validationMsVal','storageMsVal','curiosityInfluenceVal','curiosityAppliedVal','curiosityShareVal','curiosityResetsVal','curiosityBudgetUseVal','curiosityExhaustVal','curiosityModeSelect','startCuriosityAuditBtn','switchCuriosityAuditBtn','endCuriosityAuditBtn','curiosityAuditResults'])assert.match(html,new RegExp(`id="${id}"`));assert.match(html,/v0\.1\.3\.4/);assert.match(html,/Fork New Learner/);assert.match(html,/Hall of Fame/);assert.match(html,/Adaptive/);assert.match(html,/observational only/);assert.match(html,/final holdout only diagnoses/)});
+test('v0.1.4.0 UI preserves Hall, branching, performance, lineage, rehearsal and curiosity-audit diagnostics',async()=>{const html=await readFile(new URL('../index.html',import.meta.url),'utf8');for(const id of ['brainSource','hallBrainOptions','bestOption','overallOption','foragerOption','survivorOption','efficiencyOption','pinChampionBtn','restoreBestBtn','branchSelect','switchBranchBtn','researchLineageVal','policyOriginVal','hallVal','branchesVal','hallList','skillRetention','lrVal','klVal','epochsVal','retentionAlert','lineageVal','rehearsalVal','promotionVal','simSpeedVal','ppoMsVal','fpsVal','uiMsVal','validationMsVal','storageMsVal','curiosityInfluenceVal','curiosityAppliedVal','curiosityShareVal','curiosityResetsVal','curiosityBudgetUseVal','curiosityExhaustVal','curiosityModeSelect','startCuriosityAuditBtn','switchCuriosityAuditBtn','endCuriosityAuditBtn','curiosityAuditResults'])assert.match(html,new RegExp(`id="${id}"`));assert.match(html,/v0\.1\.4\.0/);assert.match(html,/Fork New Learner/);assert.match(html,/Hall of Fame/);assert.match(html,/Adaptive/);assert.match(html,/observational only/);assert.match(html,/final holdout only diagnoses/)});
 
 test('skill-regression evidence is watch-first and confirmed only on repeat',()=>{const stages=[{stage:0,name:'Motor Nursery',skillScore:.33,skillCiLow:.25,skillCiHigh:.41}];const best=[{stage:0,name:'Motor Nursery',score:.74,ciLow:.66,ciHigh:.82,atSteps:1000},null,null,null];const a=assessSkillRetention(stages,best,[0,0,0,0]);assert.equal(a.alerts.length,1);assert.equal(a.alerts[0].severity,'catastrophic');assert.equal(a.alerts[0].confirmed,false);const b=assessSkillRetention(stages,best,a.streaks);assert.equal(b.alerts[0].confirmed,true);assert.equal(b.alerts[0].streak,2)});
 test('final held-out generalization suite is all-skills and isolated from validation',()=>{const m=new RecurrentActorCritic(77);const r=evaluateHeldoutGeneralizationSuite(m,{episodesPerStage:2,seedBase:'heldout:final:test'});assert.equal(r.stageResults.length,CURRICULUM.length);assert.equal(r.episodes,2*CURRICULUM.length);assert.match(r.protocol,/heldout-generalization-v2/);assert.doesNotMatch(r.protocol,/validation:v3/)});
@@ -512,7 +514,7 @@ test('Prediction Echo and Attention Fields are real-data overlays with compact w
   assert.match(css,/worldHeadControls/);
 });
 
-test('v0.1.3.4 remains visual-only and keeps the v0.1.3.3 learning constants and schema',async()=>{
+test('v0.1.4.0 remains visual-only and keeps the accepted learning constants and schema',async()=>{
   const config=await readFile(new URL('../src/config.js',import.meta.url),'utf8');
   const session=await readFile(new URL('../src/ai/session.js',import.meta.url),'utf8');
   assert.match(config,/obsSize: 10/);assert.match(config,/hiddenSize: 24/);assert.match(config,/actionSize: 7/);
@@ -520,4 +522,55 @@ test('v0.1.3.4 remains visual-only and keeps the v0.1.3.3 learning constants and
   assert.match(config,/clip: 0\.12/);assert.match(config,/learningRate: 0\.00015/);assert.match(config,/maxGradNorm: 0\.5/);
   assert.match(config,/\[0\.10, 0\.15, 0\.20, 0\.55\]/);
   assert.match(session,/schema: 9/);
+});
+
+
+test('Cognitive Observatory exposes five compact views and hidden views stop heavy rendering',async()=>{
+  const html=await readFile(new URL('../index.html',import.meta.url),'utf8');
+  const main=await readFile(new URL('../src/app/main.js',import.meta.url),'utf8');
+  const css=await readFile(new URL('../styles.css',import.meta.url),'utf8');
+  for(const view of ['live','predict','memory','history','research'])assert.match(html,new RegExp(`data-view="${view}"`));
+  for(const id of ['predictWorldCanvas','memoryCanvas','historyCanvas','memoryInspect','historyInspect'])assert.match(html,new RegExp(`id="${id}"`));
+  assert.match(main,/activeObservatoryView === 'live'/);
+  assert.match(main,/activeObservatoryView === 'predict'/);
+  assert.match(main,/activeObservatoryView === 'memory'/);
+  assert.match(main,/activeObservatoryView === 'history'/);
+  assert.match(css,/\[data-observatory-view\]\[hidden\]\{display:none!important\}/);
+});
+
+test('Memory Constellation projection is deterministic, finite and sensitive to recurrent state',()=>{
+  const a=new Float64Array(CONFIG.model.hiddenSize);for(let i=0;i<a.length;i++)a[i]=Math.sin(i*.37);
+  const p1=projectHiddenState(a),p2=projectHiddenState(a);
+  assert.deepEqual(p1,p2);
+  assert.ok(Number.isFinite(p1.x)&&Number.isFinite(p1.y)&&Number.isFinite(p1.radius));
+  assert.ok(Math.abs(p1.x)<=1&&Math.abs(p1.y)<=1&&p1.radius>=0);
+  const b=new Float64Array(a);b[3]+=.25;const q=projectHiddenState(b);
+  assert.notDeepEqual(q,p1);
+});
+
+test('History scene is reconstructed from real validation, Champion and lineage metadata without mutating session',()=>{
+  const s=new TrainingSession({seed:601,envCount:1,autoCurriculum:false});
+  s.runValidation();
+  s.pinChampion('balanced');
+  const before=JSON.stringify(s.snapshot());
+  const scene=buildHistoryScene(s);
+  assert.ok(scene.validations.length>=1);
+  assert.ok(scene.champions.length>=1);
+  assert.ok(scene.halls.length>=1);
+  assert.equal(scene.current.lineage,s.learnerLineage.id);
+  assert.equal(JSON.stringify(s.snapshot()),before);
+});
+
+test('Cognitive Observatory memory and history renderers use real recurrent/history data and bounded runtime buffers',async()=>{
+  const memory=await readFile(new URL('../src/visualization/memoryRenderer.js',import.meta.url),'utf8');
+  const history=await readFile(new URL('../src/visualization/historyRenderer.js',import.meta.url),'utf8');
+  const main=await readFile(new URL('../src/app/main.js',import.meta.url),'utf8');
+  assert.match(memory,/projectHiddenState/);
+  assert.match(memory,/Experience ripples/i);
+  assert.match(history,/validationHistory/);
+  assert.match(history,/bestArchive/);
+  assert.match(history,/hallOfFame/);
+  assert.match(history,/frozenLearners/);
+  assert.match(main,/MEMORY_MAX_POINTS = 320/);
+  assert.match(main,/session\.hidden\?\.\[0\]/);
 });

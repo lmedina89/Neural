@@ -10,6 +10,8 @@ import { WorldRenderer } from '../visualization/worldRenderer.js';
 import { NeuralRenderer } from '../visualization/neuralRenderer.js';
 import { ChartRenderer } from '../visualization/chartRenderer.js';
 import { CuriosityRenderer } from '../visualization/curiosityRenderer.js';
+import { MemoryRenderer, projectHiddenState } from '../visualization/memoryRenderer.js';
+import { HistoryRenderer } from '../visualization/historyRenderer.js';
 
 const $ = id => document.getElementById(id);
 const el = {
@@ -41,19 +43,26 @@ const el = {
   stabilityExplained: $('stabilityExplainedVal'), stabilityKl: $('stabilityKlVal'), stabilityClip: $('stabilityClipVal'), stabilityGrad: $('stabilityGradVal'), stabilityGradClip: $('stabilityGradClipVal'),
   stabilityParamDelta: $('stabilityParamDeltaVal'), stabilityParamMax: $('stabilityParamMaxVal'), stabilityAdvantage: $('stabilityAdvantageVal'), stabilityRejected: $('stabilityRejectedVal'),
   stabilityValidation: $('stabilityValidationText'), stabilityEvents: $('stabilityEventsText'),
+  observatoryNav: $('observatoryNav'), observatoryViewNote: $('observatoryViewNote'),
+  predictWorld: $('predictWorldCanvas'), predictWorldMeta: $('predictWorldMeta'),
+  memoryCanvas: $('memoryCanvas'), memoryMeta: $('memoryMeta'), memoryInspect: $('memoryInspect'),
+  historyCanvas: $('historyCanvas'), historyMeta: $('historyMeta'), historyInspect: $('historyInspect'),
 };
 $('buildTag').textContent = `v${VERSION} • ${BUILD_MARKER}`;
 
 const budgets = { eco: { rollout: 8, delay: 30 }, balanced: { rollout: 18, delay: 10 }, adaptive: { rollout: 18, delay: 8 }, max: { rollout: 36, delay: 0 } };
 const archiveLabels = { balanced: 'CHAMPION BALANCED', overall: 'CHAMPION OVERALL', forager: 'CHAMPION FORAGER', survivor: 'CHAMPION SURVIVOR', efficiency: 'CHAMPION EFFICIENCY' };
 let mode = 'LEARN', paused = false, trainBusy = false, observeAccum = 0, lastFrame = performance.now(), viewSeedIndex = 0;
-let lastVisualRender = 0, lastCuriosityRender = 0, lastUiPaint = 0, lastUiDurationMs = 0, lastStorageDurationMs = 0, browserFps = 60, rafFrames = 0, rafWindowStart = performance.now(), adaptiveDelay = 8, controlSignature = '';
+let lastVisualRender = 0, lastCuriosityRender = 0, lastMemoryRender = 0, lastHistoryRender = 0, lastUiPaint = 0, lastUiDurationMs = 0, lastStorageDurationMs = 0, browserFps = 60, rafFrames = 0, rafWindowStart = performance.now(), adaptiveDelay = 8, controlSignature = '';
+let activeObservatoryView = 'live';
+let memoryPoints = [], memoryLastSampleAt = 0, memoryLastStep = -1, memoryLastSourceKey = '', memoryLineageId = null, memoryLastEpisode = -1;
+const MEMORY_MAX_POINTS = 320;
 let session = new TrainingSession({ seed: 1337, envCount: CONFIG.runtime.trainEnvs });
 let archiveModelCache = null, archiveModelCacheKey = null;
 let viewWorld = createViewWorld();
 let viewObs = viewWorld.observe(), viewHidden = session.model.zeroHidden(), lastSnapshot = session.model.forward(viewObs, viewHidden);
 const viewRng = new PRNG(0xabc123);
-const worldRenderer = new WorldRenderer(el.world), neuralRenderer = new NeuralRenderer(el.brain), chartRenderer = new ChartRenderer(el.chart), curiosityRenderer = new CuriosityRenderer(el.curiosityCanvas);
+const worldRenderer = new WorldRenderer(el.world), predictWorldRenderer = new WorldRenderer(el.predictWorld), neuralRenderer = new NeuralRenderer(el.brain), chartRenderer = new ChartRenderer(el.chart), curiosityRenderer = new CuriosityRenderer(el.curiosityCanvas), memoryRenderer = new MemoryRenderer(el.memoryCanvas), historyRenderer = new HistoryRenderer(el.historyCanvas);
 worldRenderer.overlayMode = el.worldFx?.value || 'BOTH';
 if (el.worldFxBadge && el.worldFx) el.worldFxBadge.textContent = el.worldFx.options[el.worldFx.selectedIndex]?.textContent?.toUpperCase() || 'ATTN + ECHO';
 const actionUi = ACTIONS.map(action => {
@@ -75,6 +84,62 @@ const actionUi = ACTIONS.map(action => {
 
 function createViewWorld() { return new World(domainSeed('observe:v2', viewSeedIndex++), session.curriculum.current()); }
 function setStatus(s) { el.status.textContent = s; }
+
+const observatoryNotes = {
+  live: 'Live world and real recurrent policy activity. Hidden observatory views stop their heavy canvas rendering.',
+  predict: 'Learned forward-model expectations versus actual sampled outcomes, plus the curiosity predictor. Visual only.',
+  memory: 'Real recurrent hidden states projected into a deterministic 2D state space. Experience Ripples come from real novelty/reward events.',
+  history: 'Persisted validation, Champion, Hall-of-Fame and lineage metadata reconstructed as a learning timeline and branch map.',
+  research: 'Detailed PPO stability, retention and evaluation telemetry. These panels remain observational unless a control explicitly says otherwise.',
+};
+function setObservatoryView(view = 'live') {
+  if (!Object.hasOwn(observatoryNotes, view)) view = 'live';
+  activeObservatoryView = view;
+  for (const node of document.querySelectorAll('[data-observatory-view]')) node.hidden = node.dataset.observatoryView !== view;
+  for (const button of el.observatoryNav?.querySelectorAll('[data-view]') || []) {
+    const active = button.dataset.view === view;
+    button.classList.toggle('active', active);
+    button.setAttribute('aria-pressed', String(active));
+  }
+  if (el.observatoryViewNote) el.observatoryViewNote.textContent = observatoryNotes[view];
+  lastVisualRender = 0; lastCuriosityRender = 0; lastMemoryRender = 0; lastHistoryRender = 0;
+}
+function resetMemoryConstellation() {
+  memoryPoints = []; memoryLastSampleAt = 0; memoryLastStep = -1; memoryLastSourceKey = ''; memoryLastEpisode = session.totalEpisodes; memoryLineageId = session.learnerLineage?.id || null;
+  if (el.memoryInspect) el.memoryInspect.textContent = 'Each point is a real sampled recurrent hidden state. Similar internal states land near each other under a fixed deterministic projection; recent experience leaves a trail and real novelty/reward events create Experience Ripples.';
+}
+function argmax(values = []) {
+  let best = 0;
+  for (let i = 1; i < values.length; i++) if ((Number(values[i]) || 0) > (Number(values[best]) || 0)) best = i;
+  return best;
+}
+function captureMemoryState(now) {
+  const lineage = session.learnerLineage?.id || '—';
+  if (memoryLineageId !== lineage || session.totalSteps < memoryLastStep) resetMemoryConstellation();
+  const minMs = mode === 'LEARN' ? 130 : 220;
+  const sourceKey = mode === 'LEARN' ? `learn:${session.totalSteps}` : `${mode}:${viewWorld?.seed ?? '—'}:${viewWorld?.stepCount ?? 0}`;
+  if (now - memoryLastSampleAt < minMs || sourceKey === memoryLastSourceKey) return;
+  const hidden = mode === 'LEARN' ? session.hidden?.[0] : viewHidden;
+  if (!hidden?.length) return;
+  const projected = projectHiddenState(hidden);
+  const world = mode === 'LEARN' ? session.envs?.[0] : viewWorld;
+  const rewardParts = world?.lastRewardParts || {};
+  const curiosity = mode === 'LEARN' && session.lastCuriosity && Math.abs(session.totalSteps - Number(session.lastCuriosity.atSteps || 0)) < 50_000 ? session.lastCuriosity : null;
+  const novelty = Math.max(0, Math.min(1, Number(curiosity?.novelty) || 0));
+  const action = Number.isInteger(curiosity?.action) ? curiosity.action : argmax(lastSnapshot?.probs || []);
+  const episodeChanged = session.totalEpisodes !== memoryLastEpisode;
+  const latestEpisode = episodeChanged ? session.episodeHistory?.at(-1) : null;
+  let eventStrength = novelty;
+  let eventType = novelty > .08 ? 'novelty' : 'ordinary state';
+  if ((Number(rewardParts.food) || 0) > 0 || (Number(latestEpisode?.food) || 0) > 0) { eventStrength = Math.max(eventStrength, .92); eventType = 'reward'; }
+  if ((Number(rewardParts.hazard) || 0) < 0 || (Number(rewardParts.death) || 0) < 0 || (Number(latestEpisode?.hazardHits) || 0) > 0) { eventStrength = Math.max(eventStrength, 1); eventType = 'danger'; }
+  if (episodeChanged && eventStrength < .32) { eventStrength = .32; eventType = latestEpisode?.survived ? 'reward' : 'episode'; }
+  memoryPoints.push({ ...projected, steps: session.totalSteps, episodes: session.totalEpisodes, createdAt: now, novelty, activity: projected.radius, action, actionLabel: ACTIONS[action] || `action ${action}`, eventStrength, eventType, lineage });
+  if (memoryPoints.length > MEMORY_MAX_POINTS) memoryPoints.shift();
+  memoryLastSampleAt = now; memoryLastStep = session.totalSteps; memoryLastSourceKey = sourceKey; memoryLastEpisode = session.totalEpisodes; memoryLineageId = lineage;
+  if (el.memoryMeta) el.memoryMeta.textContent = `${memoryPoints.length}/${MEMORY_MAX_POINTS} states • ${lineage} • runtime buffer`;
+}
+
 function formatSavedTime(ms) {
   if (!Number.isFinite(ms)) return 'unknown time';
   try { return new Date(ms).toLocaleString(); } catch { return 'unknown time'; }
@@ -127,6 +192,7 @@ async function restoreCheckpointRecord(record, label) {
   paused = true;
   el.pause.textContent = 'Resume';
   session.restore(cp);
+  resetMemoryConstellation();
   await hydratePersistentHall({ pinMigrationBaseline: cp.schema <= 6 });
   archiveModelCache = null;
   archiveModelCacheKey = null;
@@ -228,6 +294,7 @@ function resetBrain() {
   viewSeedIndex = 0;
   el.brainSource.value = 'latest';
   resetViewState();
+  resetMemoryConstellation();
   syncArchiveControls();
   setStatus('New untrained brain created. Permanent Hall of Fame preserved; prior active learner branches are not part of the new experiment.');
   updateUI();
@@ -406,19 +473,33 @@ function frame(now) {
     : mode === 'OBSERVE'
       ? CONFIG.runtime.observeRenderHz
       : CONFIG.runtime.probeRenderHz;
+  captureMemoryState(now);
   if (now - lastVisualRender >= 1000 / Math.max(1, renderHz)) {
     lastVisualRender = now;
     const model = selectedViewModel();
     const fx = cognitiveFx(model, lastSnapshot, viewWorld);
-    worldRenderer.overlayMode = el.worldFx?.value || 'BOTH';
-    worldRenderer.draw(viewWorld, mode + (paused ? ' • PAUSED' : ''), mode === 'LEARN' ? session.curiosityTrail : [], fx, now);
-    neuralRenderer.mode = el.brainView.value;
-    neuralRenderer.draw(model, lastSnapshot, fx, now);
-    if (el.curiosityCanvas.getBoundingClientRect().width > 1 && now - lastCuriosityRender >= 1000 / Math.max(1, CONFIG.runtime.curiosityRenderHz)) {
-      lastCuriosityRender = now;
-      curiosityRenderer.draw(session.curiosity, session.lastCuriosity, now);
+    if (activeObservatoryView === 'live') {
+      worldRenderer.overlayMode = el.worldFx?.value || 'BOTH';
+      worldRenderer.draw(viewWorld, mode + (paused ? ' • PAUSED' : ''), mode === 'LEARN' ? session.curiosityTrail : [], fx, now);
+      neuralRenderer.mode = el.brainView.value;
+      neuralRenderer.draw(model, lastSnapshot, fx, now);
+      updateDecision();
+    } else if (activeObservatoryView === 'predict') {
+      predictWorldRenderer.overlayMode = el.worldFx?.value || 'BOTH';
+      predictWorldRenderer.draw(viewWorld, mode + (paused ? ' • PAUSED' : ''), mode === 'LEARN' ? session.curiosityTrail : [], fx, now);
+      if (el.predictWorldMeta) el.predictWorldMeta.textContent = `${el.worldFx?.options[el.worldFx.selectedIndex]?.textContent || 'Attention + Echo'} • ${mode} • visual only`;
+      if (el.curiosityCanvas.getBoundingClientRect().width > 1 && now - lastCuriosityRender >= 1000 / Math.max(1, CONFIG.runtime.curiosityRenderHz)) {
+        lastCuriosityRender = now;
+        curiosityRenderer.draw(session.curiosity, session.lastCuriosity, now);
+      }
+    } else if (activeObservatoryView === 'memory' && now - lastMemoryRender >= 80) {
+      lastMemoryRender = now;
+      memoryRenderer.draw(memoryPoints, now, { mode, steps: session.totalSteps });
+    } else if (activeObservatoryView === 'history' && now - lastHistoryRender >= 220) {
+      lastHistoryRender = now;
+      historyRenderer.draw(session, now);
+      if (el.historyMeta) el.historyMeta.textContent = `${session.validationHistory?.length || 0} validations • ${session.lineageHistory?.length || 0} lineages • ${session.hallOfFame?.length || 0} Hall`;
     }
-    updateDecision();
   }
   requestAnimationFrame(frame);
 }
@@ -571,7 +652,7 @@ function updateUI() {
   el.resultsCompactSummary.textContent = `learner ${lv ? pct(lv.validation.categoryScores?.balanced ?? lv.validation.score) : '—'} • Champion ${balancedBrain?.validation?.categoryScores ? pct(balancedBrain.validation.categoryScores.balanced) : '—'} • final holdout diagnostic only`;
 
   renderSkillRetention();
-  chartRenderer.draw(session.metrics);
+  if (activeObservatoryView === 'live' && el.chart.getBoundingClientRect().width > 1) chartRenderer.draw(session.metrics);
   syncArchiveControls();
   lastUiDurationMs = performance.now() - uiStarted;
   el.uiMs.textContent = `${lastUiDurationMs.toFixed(1)} ms`;
@@ -982,6 +1063,19 @@ el.test.addEventListener('click', runUnseen);
 el.compare.addEventListener('click', compareBrains);
 el.brain.addEventListener('pointerdown', e => { const text = neuralRenderer.inspectAt(e.clientX, e.clientY); if (text) el.inspect.textContent = text; });
 el.curiosityCanvas.addEventListener('pointerdown', e => { const text = curiosityRenderer.inspectAt(e.clientX, e.clientY); if (text) el.curiosityInspect.textContent = text; });
+el.observatoryNav?.addEventListener('click', e => {
+  const button = e.target.closest('[data-view]');
+  if (!button) return;
+  setObservatoryView(button.dataset.view);
+});
+el.memoryCanvas?.addEventListener('pointerdown', e => {
+  const text = memoryRenderer.inspectAt(e.clientX, e.clientY, memoryPoints);
+  if (text) el.memoryInspect.textContent = text;
+});
+el.historyCanvas?.addEventListener('pointerdown', e => {
+  const text = historyRenderer.inspectAt(e.clientX, e.clientY);
+  if (text) el.historyInspect.textContent = text;
+});
 el.world.addEventListener('pointerdown', e => {
   if (mode !== 'PROBE') return;
   const r = el.world.getBoundingClientRect();
@@ -1000,6 +1094,8 @@ el.world.addEventListener('pointerdown', e => {
   setStatus(`Probe moved ${tool}. ${selectedSourceLabel()} policy outputs updated without taking an action.`);
 });
 
+setObservatoryView('live');
+resetMemoryConstellation();
 updateUI();
 setMode('LEARN');
 requestAnimationFrame(frame);

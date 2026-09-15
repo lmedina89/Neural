@@ -1,5 +1,5 @@
-export const VERSION = '0.1.3.4';
-export const BUILD_MARKER = 'PREDATTN-0134';
+export const VERSION = '0.1.4.0';
+export const BUILD_MARKER = 'COGOBS-0140';
 
 export const CONFIG = Object.freeze({
   world: {

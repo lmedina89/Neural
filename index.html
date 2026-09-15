@@ -14,7 +14,7 @@
         <div class="eyebrow">MICROMIND • LEARNING LABORATORY</div>
         <h1>Watch a tiny brain actually learn.</h1>
       </div>
-      <div class="build" id="buildTag">v0.1.3.3 • NEURAFX-0133</div>
+      <div class="build" id="buildTag">v0.1.4.0 • COGOBS-0140</div>
     </header>
 
     <section class="controls" aria-label="Main controls">
@@ -59,54 +59,20 @@
       <div><b>VALIDATION AUTOSAVE</b><span id="autosaveSlotInfo">Checking browser storage…</span></div>
     </section>
 
-    <details class="researchStatusPanel panel collapsiblePanel" aria-label="Research status">
-      <summary class="panelSummary"><strong>RESEARCH STATUS</strong><span id="researchCompactSummary">policy preservation + lineage</span></summary>
-      <div class="collapsibleBody">
-      <div class="researchGrid">
-        <div><span>experience age</span><b id="experienceAgeVal">0</b></div>
-        <div><span>learner lineage</span><b id="researchLineageVal">—</b></div>
-        <div><span>policy origin</span><b id="policyOriginVal">native</b></div>
-        <div><span>active Champion</span><b id="activeChampionVal">—</b></div>
-        <div><span>Hall of Fame</span><b id="hallVal">empty</b></div>
-        <div><span>frozen branches</span><b id="branchesVal">0</b></div>
-      </div>
-      <div id="hallList" class="hallList">No pinned historic brains yet.</div>
-      </div>
-    </details>
-
-    <details class="helpPanel">
-      <summary>What do the controls and numbers mean?</summary>
-      <div class="helpGrid">
-        <div><b>New Brain</b><span>Fresh random network. Save first if you want to keep the current run.</span></div>
-        <div><b>Learn</b><span>Runs guarded PPO on the autonomous Learner. Earlier skills are continuously rehearsed alongside the current curriculum.</span></div>
-        <div><b>Cognitive Flow</b><span>Animates real sensory influence, recurrent memory links, policy/value pathways, decision confidence, reward and novelty. It is a read-only visualization of the actual running networks.</span></div>
-        <div><b>Attention + Echo</b><span>Projects real input influence into the world as light fields, then overlays the curiosity model’s predicted next sensory state against what actually happened. Gold is predicted; cyan is actual. Visual only.</span></div>
-        <div><b>Curiosity</b><span>A tiny learned forward model predicts the next sensory state. Unexpected-but-nonterminal transitions add a tightly capped intrinsic bonus during training only. Evaluations never include it.</span></div>
-        <div><b>Observe</b><span>Stops learning and watches the selected Learner/Champion brain act at human speed.</span></div>
-        <div><b>Probe</b><span>Freezes action. Move food/hazard/agent and inspect real policy changes.</span></div>
-        <div><b>Compute</b><span>Eco reduces heat; Balanced is default; Adaptive changes only idle delay based on browser responsiveness; Max favors throughput. Learning math is unchanged.</span></div>
-        <div><b>View Brain</b><span>Learner changes continuously. Frozen Champions and Hall-of-Fame brains can be inspected in Observe/Probe without being modified.</span></div>
-        <div><b>Save Manual</b><span>Saves the current run to the manual slot. Recovery protection refuses to overwrite a manual brain with a lower-step brain.</span></div>
-        <div><b>Load Manual / Autosave</b><span>Each stored slot is shown separately with its step count and timestamp. Loading pauses training for verification.</span></div>
-        <div><b>Unseen Test</b><span>Final all-skills holdout. Diagnostic only: it never selects archives or triggers rollback. Use sparingly so human decisions do not overfit it.</span></div>
-        <div><b>Compare Brains</b><span>Replays historical brains on a separate comparison-only holdout, not the final Unseen Test domain.</span></div>
-        <div><b>Pin Champion</b><span>Copies a Champion into the permanent Hall of Fame. The Hall uses its own browser-storage record as well as checkpoint backup.</span></div>
-        <div><b>Fork New Learner</b><span>Manual experiment only: freezes the active Learner, starts a new lineage from a Champion/Hall brain, and keeps the old lineage available to switch back to.</span></div>
-        <div><b>Switch Branch</b><span>Freeze the current lineage and resume another stored Learner lineage. Only one branch trains at a time to avoid wasting phone compute.</span></div>
-        <div><b>Return</b><span>Recent average total reward. Higher is better, but reinforcement learning is noisy.</span></div>
-        <div><b>Food</b><span>Recent average resources collected per episode.</span></div>
-        <div><b>Entropy</b><span>Policy uncertainty/exploration. High means action probabilities are more spread out.</span></div>
-        <div><b>Value</b><span>The critic's estimate of expected future return from the current state.</span></div>
-        <div><b>Validation</b><span>12 fixed seeds per skill plus confidence ranges. Retention warnings are observational; Champions require repeat-confirmed improvement before promotion.</span></div>
-      </div>
-    </details>
-
     <section class="statusline" aria-live="polite">
       <span id="modeBadge">LEARN</span>
       <span id="statusText">Ready.</span>
     </section>
 
-    <section class="workspace">
+    <nav class="observatoryNav" id="observatoryNav" aria-label="Cognitive observatory views">
+      <button class="active" data-view="live" aria-pressed="true"><span>LIVE</span><small>world + brain</small></button>
+      <button data-view="predict" aria-pressed="false"><span>PREDICT</span><small>expectation + curiosity</small></button>
+      <button data-view="memory" aria-pressed="false"><span>MEMORY</span><small>recurrent constellation</small></button>
+      <button data-view="history" aria-pressed="false"><span>HISTORY</span><small>learning + lineage</small></button>
+      <button data-view="research" aria-pressed="false"><span>RESEARCH</span><small>validation + PPO</small></button>
+    </nav>
+    <div class="observatoryViewNote" id="observatoryViewNote">Live world and real recurrent policy activity. Hidden observatory views stop their heavy canvas rendering.</div>
+    <section class="workspace" data-observatory-view="live">
       <article class="panel worldPanel">
         <div class="panelHead worldPanelHead"><strong>WORLD</strong><div class="worldHeadControls"><span id="worldFxBadge">ATTN + ECHO</span><select id="worldFx" aria-label="World cognitive overlay"><option value="BOTH" selected>Attention + Echo</option><option value="ATTENTION">Attention Field</option><option value="ECHO">Prediction Echo</option><option value="OFF">Clean World</option></select><span id="worldMeta">seed —</span></div></div>
         <canvas id="worldCanvas" aria-label="Agent world"></canvas>
@@ -133,7 +99,7 @@
       </article>
     </section>
 
-    <section class="metricsGrid">
+    <section class="metricsGrid" data-observatory-view="live">
       <article class="panel metricPanel">
         <div class="panelHead"><strong>TRAINING</strong><span id="paramCount">— params</span></div>
         <div class="numbers">
@@ -177,7 +143,74 @@
       </article>
     </section>
 
-    <details class="panel stabilityPanel collapsiblePanel" aria-label="PPO stability observatory">
+
+    <section class="predictWorkspace" data-observatory-view="predict" hidden>
+      <article class="panel predictWorldPanel">
+        <div class="panelHead"><strong>PREDICTION STAGE</strong><span id="predictWorldMeta">Attention + Echo • same live world • visual only</span></div>
+        <canvas id="predictWorldCanvas" aria-label="Prediction echo and attention field world"></canvas>
+        <div class="observatoryCaption">Gold = predicted next sensory state • cyan = actual sampled outcome • attention fields come from real policy input influence.</div>
+      </article>
+    </section>
+
+    <section class="memoryWorkspace" data-observatory-view="memory" hidden>
+      <article class="panel memoryPanel">
+        <div class="panelHead"><strong>MEMORY CONSTELLATION</strong><span id="memoryMeta">collecting live recurrent states</span></div>
+        <canvas id="memoryCanvas" aria-label="Projected recurrent-state memory constellation"></canvas>
+        <div class="observatoryCaption" id="memoryInspect">Each point is a real sampled recurrent hidden state. Similar internal states land near each other under a fixed deterministic projection; recent experience leaves a trail and real novelty/reward events create Experience Ripples.</div>
+      </article>
+    </section>
+
+    <section class="historyWorkspace" data-observatory-view="history" hidden>
+      <article class="panel historyPanel">
+        <div class="panelHead"><strong>LEARNING TIMELINE + BRAIN LINEAGE</strong><span id="historyMeta">persisted checkpoints • Champions • branches</span></div>
+        <canvas id="historyCanvas" aria-label="Learning timeline and brain lineage map"></canvas>
+        <div class="observatoryCaption" id="historyInspect">Tap a milestone or lineage node. This view is reconstructed from saved validation, Champion, Hall-of-Fame, and branch metadata; it never changes the Learner.</div>
+      </article>
+    </section>
+
+    <details class="researchStatusPanel panel collapsiblePanel" data-observatory-view="research" hidden aria-label="Research status">
+      <summary class="panelSummary"><strong>RESEARCH STATUS</strong><span id="researchCompactSummary">policy preservation + lineage</span></summary>
+      <div class="collapsibleBody">
+      <div class="researchGrid">
+        <div><span>experience age</span><b id="experienceAgeVal">0</b></div>
+        <div><span>learner lineage</span><b id="researchLineageVal">—</b></div>
+        <div><span>policy origin</span><b id="policyOriginVal">native</b></div>
+        <div><span>active Champion</span><b id="activeChampionVal">—</b></div>
+        <div><span>Hall of Fame</span><b id="hallVal">empty</b></div>
+        <div><span>frozen branches</span><b id="branchesVal">0</b></div>
+      </div>
+      <div id="hallList" class="hallList">No pinned historic brains yet.</div>
+      </div>
+    </details>
+
+    <details class="helpPanel" data-observatory-view="research" hidden>
+      <summary>What do the controls and numbers mean?</summary>
+      <div class="helpGrid">
+        <div><b>New Brain</b><span>Fresh random network. Save first if you want to keep the current run.</span></div>
+        <div><b>Learn</b><span>Runs guarded PPO on the autonomous Learner. Earlier skills are continuously rehearsed alongside the current curriculum.</span></div>
+        <div><b>Cognitive Flow</b><span>Animates real sensory influence, recurrent memory links, policy/value pathways, decision confidence, reward and novelty. It is a read-only visualization of the actual running networks.</span></div>
+        <div><b>Attention + Echo</b><span>Projects real input influence into the world as light fields, then overlays the curiosity model’s predicted next sensory state against what actually happened. Gold is predicted; cyan is actual. Visual only.</span></div>
+        <div><b>Curiosity</b><span>A tiny learned forward model predicts the next sensory state. Unexpected-but-nonterminal transitions add a tightly capped intrinsic bonus during training only. Evaluations never include it.</span></div>
+        <div><b>Observe</b><span>Stops learning and watches the selected Learner/Champion brain act at human speed.</span></div>
+        <div><b>Probe</b><span>Freezes action. Move food/hazard/agent and inspect real policy changes.</span></div>
+        <div><b>Compute</b><span>Eco reduces heat; Balanced is default; Adaptive changes only idle delay based on browser responsiveness; Max favors throughput. Learning math is unchanged.</span></div>
+        <div><b>View Brain</b><span>Learner changes continuously. Frozen Champions and Hall-of-Fame brains can be inspected in Observe/Probe without being modified.</span></div>
+        <div><b>Save Manual</b><span>Saves the current run to the manual slot. Recovery protection refuses to overwrite a manual brain with a lower-step brain.</span></div>
+        <div><b>Load Manual / Autosave</b><span>Each stored slot is shown separately with its step count and timestamp. Loading pauses training for verification.</span></div>
+        <div><b>Unseen Test</b><span>Final all-skills holdout. Diagnostic only: it never selects archives or triggers rollback. Use sparingly so human decisions do not overfit it.</span></div>
+        <div><b>Compare Brains</b><span>Replays historical brains on a separate comparison-only holdout, not the final Unseen Test domain.</span></div>
+        <div><b>Pin Champion</b><span>Copies a Champion into the permanent Hall of Fame. The Hall uses its own browser-storage record as well as checkpoint backup.</span></div>
+        <div><b>Fork New Learner</b><span>Manual experiment only: freezes the active Learner, starts a new lineage from a Champion/Hall brain, and keeps the old lineage available to switch back to.</span></div>
+        <div><b>Switch Branch</b><span>Freeze the current lineage and resume another stored Learner lineage. Only one branch trains at a time to avoid wasting phone compute.</span></div>
+        <div><b>Return</b><span>Recent average total reward. Higher is better, but reinforcement learning is noisy.</span></div>
+        <div><b>Food</b><span>Recent average resources collected per episode.</span></div>
+        <div><b>Entropy</b><span>Policy uncertainty/exploration. High means action probabilities are more spread out.</span></div>
+        <div><b>Value</b><span>The critic's estimate of expected future return from the current state.</span></div>
+        <div><b>Validation</b><span>12 fixed seeds per skill plus confidence ranges. Retention warnings are observational; Champions require repeat-confirmed improvement before promotion.</span></div>
+      </div>
+    </details>
+
+    <details class="panel stabilityPanel collapsiblePanel" data-observatory-view="research" hidden aria-label="PPO stability observatory">
       <summary class="panelSummary"><strong>PPO STABILITY</strong><span id="stabilityCompactSummary">observational telemetry • no learning intervention</span></summary>
       <div class="collapsibleBody">
         <div class="stabilityNotice">Observational only. This panel records what PPO was doing before validation swings; it never changes weights, learning rate, curriculum, curiosity, or Champion state.</div>
@@ -200,7 +233,7 @@
       </div>
     </details>
 
-    <details class="panel curiosityPanel collapsiblePanel" aria-label="Curiosity and prediction model">
+    <details class="panel curiosityPanel collapsiblePanel" data-observatory-view="predict" open hidden aria-label="Curiosity and prediction model">
       <summary class="panelSummary"><strong>CURIOSITY / PREDICTION</strong><span id="curiosityCompactSummary">learned forward model • evaluation curiosity OFF</span></summary>
       <div class="collapsibleBody">
       <div class="curiosityGrid">
@@ -249,17 +282,17 @@
       </div>
     </details>
 
-    <details class="panel skillPanel collapsiblePanel">
+    <details class="panel skillPanel collapsiblePanel" data-observatory-view="research" hidden>
       <summary class="panelSummary"><strong>SKILL RETENTION</strong><span id="skillCompactSummary">validation:v3 • observational only • 95% ranges</span></summary>
       <div class="collapsibleBody"><div id="skillRetention" class="skillRetention">Waiting for autonomous continual-learning validation…</div></div>
     </details>
 
-    <details class="panel resultsPanel collapsiblePanel">
+    <details class="panel resultsPanel collapsiblePanel" data-observatory-view="research" hidden>
       <summary class="panelSummary"><strong>EVALUATION / CHECKPOINTS</strong><span id="resultsCompactSummary">validation promotes Champions • final holdout only diagnoses</span></summary>
       <div class="collapsibleBody"><div id="resultsText" class="resultsText">No evaluation run yet.</div></div>
     </details>
 
-    <footer>MicroMind v0.1.3.4 adds Prediction Echo & Attention Fields: real sensory influence becomes a world-space light field, while the learned forward model projects gold predicted-state echoes against cyan actual sensory outcomes. Learning math, curiosity reward, curriculum, save schema, and protected Champion behavior remain unchanged.</footer>
+    <footer>MicroMind v0.1.4.0 Cognitive Observatory adds view-based navigation, a real recurrent-state Memory Constellation with Experience Ripples, and a persisted Learning Timeline / Brain Lineage map. Hidden heavy views stop rendering. Learning math, curiosity reward, curriculum, save schema, and protected Champion behavior remain unchanged.</footer>
   </main>
   <script type="module" src="./src/app/main.js"></script>
 </body>
