@@ -1,20 +1,23 @@
 # Roadmap
 
-Current: **v0.1.3 — Intrinsic Curiosity Foundation**.
+Current: **v0.1.3.1 — Curiosity Audit & Ablation**.
 
-Physical acceptance goals:
-1. migrate the current v0.1.2.1 run without losing its Learner/Champions/Hall;
-2. verify the curiosity predictor begins fresh on schema-6 migration and persists after schema-7 save/reload;
-3. verify prediction error/loss generally decreases for familiar experience;
-4. verify novelty visibly rises on less predictable transitions;
-5. verify intrinsic reward stays small and never appears in validation or final holdout scoring;
-6. verify no obvious curiosity reward hacking (spinning, wall-seeking, intentional death);
-7. verify iPhone Safari throughput remains acceptable relative to v0.1.2.1;
-8. compare curiosity-trained Learner/Champions against pinned pre-curiosity policy references using the unchanged external evaluation protocols.
+Immediate acceptance goal: answer whether v0.1.3 intrinsic reward improves external-task learning versus an otherwise matched observe-only control.
 
-After acceptance:
-1. **v0.1.4 — learned world model / predictive memory**: extend one-step prediction into a richer latent dynamics model;
-2. **v0.1.5 — imagination / primitive planning**: score short model-generated futures before acting;
-3. richer hidden-rule and delayed-memory tasks;
-4. controlled policy-capacity experiment (1,040 vs ~4k vs ~12k parameters) if evidence suggests a representational ceiling;
-5. recurrent-PPO modernization as a separate controlled milestone rather than mixing it with curiosity/world-model changes.
+Required evidence:
+1. current Learner/Champion/Hall survive migration;
+2. CONTROL and CURIOSITY start from identical serialized state;
+3. CONTROL predictor continues learning while applied intrinsic reward stays exactly zero;
+4. both branches receive equal branch-local training budgets and PPO schedule age;
+5. audit evaluations use the same read-only seeds and never promote Champions;
+6. paired 0.5M-step checkpoints are inspected through the 2M/branch target;
+7. confidence ranges and multi-checkpoint trend, not a single spike, determine the interpretation;
+8. iPhone Safari remains stable and acceptably cool/fast.
+
+Only after the ablation result:
+- if curiosity helps, retain it and proceed toward a richer learned world model;
+- if curiosity is neutral, decide whether its exploration value justifies complexity;
+- if curiosity hurts, disable its reward influence while keeping the predictor as an observational/world-model foundation;
+- do not retune curiosity and PPO simultaneously, because that would destroy causal clarity.
+
+Future candidates remain world-model/predictive memory, primitive imagination/planning, richer delayed-memory tasks, and controlled policy-capacity experiments.

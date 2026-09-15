@@ -30,6 +30,11 @@ const el = {
   simSpeed: $('simSpeedVal'), ppoMs: $('ppoMsVal'), fps: $('fpsVal'), uiMs: $('uiMsVal'), validationMs: $('validationMsVal'), storageMs: $('storageMsVal'),
   curiosityCanvas: $('curiosityCanvas'), curiosityError: $('curiosityErrorVal'), curiosityNovelty: $('curiosityNoveltyVal'), curiosityBonus: $('curiosityBonusVal'),
   curiosityBudget: $('curiosityBudgetVal'), curiosityLoss: $('curiosityLossVal'), curiosityParams: $('curiosityParamsVal'), curiosityInspect: $('curiosityInspect'),
+  curiosityInfluence: $('curiosityInfluenceVal'), curiosityApplied: $('curiosityAppliedVal'), curiosityShare: $('curiosityShareVal'),
+  curiosityResets: $('curiosityResetsVal'), curiosityBudgetUse: $('curiosityBudgetUseVal'), curiosityExhaust: $('curiosityExhaustVal'),
+  curiosityMode: $('curiosityModeSelect'), startCuriosityAudit: $('startCuriosityAuditBtn'), switchCuriosityAudit: $('switchCuriosityAuditBtn'), endCuriosityAudit: $('endCuriosityAuditBtn'),
+  curiosityAuditRole: $('curiosityAuditRoleVal'), curiosityControlProgress: $('curiosityControlProgressVal'), curiosityRewardProgress: $('curiosityRewardProgressVal'),
+  curiosityPairCheckpoint: $('curiosityPairCheckpointVal'), curiosityControlScore: $('curiosityControlScoreVal'), curiosityRewardScore: $('curiosityRewardScoreVal'), curiosityAuditResults: $('curiosityAuditResults'),
 };
 $('buildTag').textContent = `v${VERSION} • ${BUILD_MARKER}`;
 
@@ -199,8 +204,9 @@ function setMode(next) {
   if (next === 'PROBE') el.probe.classList.add('active');
   if (next !== 'LEARN') resetViewState();
   el.viewBrainBadge.textContent = selectedSourceLabel();
+  const curiosityModeText = session.curiosityRewardMode === 'reward' ? 'curiosity reward ON' : 'curiosity observe-only (reward 0)';
   setStatus(next === 'LEARN'
-    ? 'Autonomous Learner active. PPO trains across current challenges plus rehearsal, with a small bounded intrinsic bonus from the learned curiosity predictor; Champions remain frozen observers.'
+    ? `Autonomous Learner active. PPO trains across current challenges plus rehearsal; ${curiosityModeText}. Champions remain frozen observers.`
     : next === 'OBSERVE'
       ? `Watching the ${selectedSourceLabel().toLowerCase()} policy in a separate procedural world.`
       : 'World frozen. Tap to manipulate stimuli and inspect the selected policy response.');
@@ -280,6 +286,30 @@ async function trainTick() {
     } else if (result.metric.earlyStopped && result.metric.maxEpochKL > CONFIG.ppo.targetKL) {
       setStatus(`PPO epoch stopped early at KL ${result.metric.maxEpochKL.toFixed(3)} to avoid a numerically oversized optimizer step.`);
     }
+
+    if (result.auditEvaluation) {
+      forceUi = true;
+      const a = result.auditEvaluation;
+      try {
+        const saveStarted = performance.now();
+        await saveCheckpoint(session.snapshot(), 'autosave');
+        lastStorageDurationMs = performance.now() - saveStarted;
+        await refreshSaveSlots();
+      } catch (saveErr) {
+        console.warn('Curiosity audit autosave failed', saveErr);
+      }
+      setStatus(`Curiosity A/B ${String(a.role).toUpperCase()} checkpoint @ ${Number(a.checkpointSteps).toLocaleString()} branch steps: balanced ${(a.validation.balancedScore * 100).toFixed(1)}%. Same fixed audit seeds; Champion promotion remains suspended.`);
+    }
+    if (result.auditBranchComplete) {
+      forceUi = true;
+      paused = true;
+      el.pause.textContent = 'Resume';
+      const audit = session.curiosityAuditSummary();
+      const other = audit.role === 'control' ? 'CURIOSITY' : 'CONTROL';
+      setStatus(audit.completed
+        ? 'Curiosity A/B audit complete on both branches. Training paused. No winner was promoted automatically; review the paired results and End Audit when ready.'
+        : `${String(audit.role || '').toUpperCase()} branch reached ${Number(audit.targetStepsPerBranch).toLocaleString()} audit steps. Training paused. Switch to ${other} to run the matched branch.`);
+    }
     maybeUpdateUI(forceUi);
     setTimeout(trainTick, nextTrainingDelay(budgetKey, b.delay));
   } catch (err) {
@@ -350,8 +380,14 @@ function updateDecision() {
   }
   el.value.textContent = `value ${s.value.toFixed(3)}`;
   const rp = viewWorld.lastRewardParts || {};
-  const curiosityBonus = mode === 'LEARN' ? Number(session.lastCuriosity?.bonus || 0) : 0;
-  el.rewardParts.textContent = `external  food ${(rp.food || 0).toFixed(3)}  approach ${(rp.approach || 0).toFixed(3)}  energy ${(rp.energy || 0).toFixed(3)}  wall ${(rp.wall || 0).toFixed(3)}  hazard ${(rp.hazard || 0).toFixed(3)}  death ${(rp.death || 0).toFixed(3)}  | curiosity +${curiosityBonus.toFixed(4)}${mode === 'LEARN' ? '' : ' (OFF in evaluation/observation)'}`;
+  const curiosityPotential = mode === 'LEARN' ? Number(session.lastCuriosity?.potentialBonus ?? session.lastCuriosity?.bonus ?? 0) : 0;
+  const curiosityApplied = mode === 'LEARN' ? Number(session.lastCuriosity?.appliedBonus ?? (session.curiosityRewardMode === 'reward' ? curiosityPotential : 0)) : 0;
+  const curiositySuffix = mode !== 'LEARN'
+    ? ' (OFF in evaluation/observation)'
+    : session.curiosityRewardMode === 'observe'
+      ? ` potential +${curiosityPotential.toFixed(4)} • APPLIED +0.0000`
+      : ` +${curiosityApplied.toFixed(4)}`;
+  el.rewardParts.textContent = `external  food ${(rp.food || 0).toFixed(3)}  approach ${(rp.approach || 0).toFixed(3)}  energy ${(rp.energy || 0).toFixed(3)}  wall ${(rp.wall || 0).toFixed(3)}  hazard ${(rp.hazard || 0).toFixed(3)}  death ${(rp.death || 0).toFixed(3)}  | curiosity${curiositySuffix}`;
   el.energy.value = viewWorld.agent.energy;
   el.energyText.textContent = `${Math.round(viewWorld.agent.energy * 100)}%`;
   el.worldMeta.textContent = `seed ${viewWorld.seed}`;
@@ -364,6 +400,7 @@ function policyOriginText() {
   if (!parent) return 'native learner';
   if (parent.type === 'hall-of-fame') return `${parent.hallId || 'Hall'} @ ${Number(parent.sourceSteps || 0).toLocaleString()}`;
   if (parent.type === 'champion') return `Champion ${title(parent.category || 'balanced')} @ ${Number(parent.sourceSteps || 0).toLocaleString()}`;
+  if (parent.type === 'curiosity-audit-origin') return `A/B origin ${parent.lineageId || 'learner'} @ ${Number(parent.sourceSteps || 0).toLocaleString()}`;
   if (parent.legacySchema) return `schema-${parent.legacySchema} migration`;
   return lineage.reason || 'derived learner';
 }
@@ -405,17 +442,48 @@ function updateUI() {
 
   const curiosityMetric = m?.curiosity || {};
   const curiosityLive = session.lastCuriosity;
+  const episodeDiagnostics = curiosityMetric.episodeDiagnostics || session.curiosityDiagnosticsSummary();
+  const audit = session.curiosityAuditSummary();
+  const potentialBonus = Number(curiosityLive?.potentialBonus ?? curiosityLive?.bonus);
+  const appliedBonus = Number(curiosityLive?.appliedBonus ?? (session.curiosityRewardMode === 'reward' ? potentialBonus : 0));
   el.curiosityError.textContent = Number.isFinite(curiosityLive?.error) ? curiosityLive.error.toFixed(4) : Number.isFinite(curiosityMetric.meanPredictionError) ? curiosityMetric.meanPredictionError.toFixed(4) : '—';
   el.curiosityNovelty.textContent = Number.isFinite(curiosityLive?.novelty) ? `${(curiosityLive.novelty * 100).toFixed(0)}%` : Number.isFinite(curiosityMetric.meanNovelty) ? `${(curiosityMetric.meanNovelty * 100).toFixed(0)}%` : '—';
-  el.curiosityBonus.textContent = Number.isFinite(curiosityLive?.bonus) ? `+${curiosityLive.bonus.toFixed(5)}` : '—';
+  el.curiosityBonus.textContent = Number.isFinite(potentialBonus) ? `+${potentialBonus.toFixed(5)}` : '—';
+  el.curiosityApplied.textContent = Number.isFinite(appliedBonus) ? `+${appliedBonus.toFixed(5)}` : '—';
   el.curiosityBudget.textContent = Number.isFinite(curiosityLive?.budgetRemaining) ? `${curiosityLive.budgetRemaining.toFixed(3)} / ${CONFIG.curiosity.maxEpisodeBonus.toFixed(2)}` : `max ${CONFIG.curiosity.maxEpisodeBonus.toFixed(2)}`;
   el.curiosityLoss.textContent = Number.isFinite(curiosityMetric.predictorLoss) ? curiosityMetric.predictorLoss.toFixed(5) : '—';
   el.curiosityParams.textContent = session.curiosity.paramCount().toLocaleString();
+  el.curiosityInfluence.textContent = session.curiosityRewardMode === 'reward' ? 'REWARD ON' : 'OBSERVE ONLY';
+  el.curiosityShare.textContent = Number.isFinite(curiosityMetric.rewardMagnitudeShare) ? `${(curiosityMetric.rewardMagnitudeShare * 100).toFixed(3)}%` : '—';
+  el.curiosityResets.textContent = Number(episodeDiagnostics.budgetResets || 0).toLocaleString();
+  el.curiosityBudgetUse.textContent = episodeDiagnostics.episodes
+    ? `${(Number(episodeDiagnostics.meanBudgetUseFraction || 0) * 100).toFixed(1)}% • ${Number(episodeDiagnostics.meanBudgetUsed || 0).toFixed(4)}`
+    : '—';
+  el.curiosityExhaust.textContent = episodeDiagnostics.episodes
+    ? `${(Number(episodeDiagnostics.budgetExhaustionRate || 0) * 100).toFixed(0)}%${Number.isFinite(episodeDiagnostics.meanExhaustionFraction) ? ` • @ ${(episodeDiagnostics.meanExhaustionFraction * 100).toFixed(0)}%` : ''}`
+    : '—';
   if (curiosityLive?.mostSurprisingIndex != null) {
     const names = ['food x','food y','food dist','danger L','danger F','danger R','speed','turn rate','energy'];
     const name = names[curiosityLive.mostSurprisingIndex] || `sensor ${curiosityLive.mostSurprisingIndex}`;
-    el.curiosityInspect.textContent = `Most surprising now: ${name} • |prediction error| ${Number(curiosityLive.mostSurprisingError || 0).toFixed(4)} • intrinsic reward is capped and training-only.`;
+    const influence = session.curiosityRewardMode === 'reward' ? `applied +${Number(appliedBonus || 0).toFixed(5)}` : `potential +${Number(potentialBonus || 0).toFixed(5)} • applied +0.00000`;
+    el.curiosityInspect.textContent = `Most surprising now: ${name} • |prediction error| ${Number(curiosityLive.mostSurprisingError || 0).toFixed(4)} • ${influence}. Predictor learning stays on; evaluation curiosity stays OFF.`;
   }
+
+  el.curiosityMode.value = session.curiosityRewardMode;
+  el.curiosityMode.disabled = audit.active;
+  el.startCuriosityAudit.disabled = audit.active;
+  el.switchCuriosityAudit.disabled = !audit.active;
+  el.endCuriosityAudit.disabled = !audit.active;
+  el.curiosityAuditRole.textContent = audit.active ? `${String(audit.role || '—').toUpperCase()} • ${session.curiosityRewardMode === 'reward' ? 'reward on' : 'reward 0'}` : 'none';
+  const target = Number(audit.targetStepsPerBranch || CONFIG.curiosityAudit.targetStepsPerBranch);
+  el.curiosityControlProgress.textContent = audit.id ? `${Number(audit.controlProgress || 0).toLocaleString()} / ${target.toLocaleString()}` : '—';
+  el.curiosityRewardProgress.textContent = audit.id ? `${Number(audit.curiosityProgress || 0).toLocaleString()} / ${target.toLocaleString()}` : '—';
+  el.curiosityPairCheckpoint.textContent = Number.isFinite(audit.comparison?.checkpointSteps) ? Number(audit.comparison.checkpointSteps).toLocaleString() : '—';
+  el.curiosityControlScore.textContent = Number.isFinite(audit.comparison?.controlScore) ? pct(audit.comparison.controlScore) : '—';
+  el.curiosityRewardScore.textContent = Number.isFinite(audit.comparison?.curiosityScore) ? pct(audit.comparison.curiosityScore) : '—';
+  el.switchCuriosityAudit.textContent = audit.active ? `Switch to ${audit.role === 'control' ? 'CURIOSITY' : 'CONTROL'}` : 'Switch A/B Branch';
+  el.curiosityAuditResults.textContent = formatCuriosityAuditResults(audit);
+
 
   const hall = session.hallOfFameSummary();
   const branches = session.frozenLearnerSummary();
@@ -455,6 +523,30 @@ function renderSkillRetention() {
     el.skillRetention.append(cell);
   }
 }
+function formatCuriosityAuditResults(audit) {
+  if (!audit?.id) return 'Audit idle. Start it only after loading/saving the learner you want to preserve as the experiment origin.';
+  const lines = [];
+  const origin = audit.results?.find(x => x.role === 'origin');
+  lines.push(`${audit.id} • origin @ ${Number(audit.originSteps || 0).toLocaleString()} global steps${Number.isFinite(origin?.balancedScore) ? ` • baseline ${pct(origin.balancedScore)}` : ''}`);
+  const checkpoints = [...new Set((audit.results || []).filter(x => x.role !== 'origin').map(x => Number(x.checkpointSteps) || 0))].sort((a, b) => a - b);
+  for (const cp of checkpoints) {
+    const c = audit.results.find(x => x.role === 'control' && Number(x.checkpointSteps) === cp);
+    const q = audit.results.find(x => x.role === 'curiosity' && Number(x.checkpointSteps) === cp);
+    lines.push(`${cp.toLocaleString()} branch steps • CONTROL ${Number.isFinite(c?.balancedScore) ? pct(c.balancedScore) : '—'} • CURIOSITY ${Number.isFinite(q?.balancedScore) ? pct(q.balancedScore) : '—'}`);
+  }
+  const cmp = audit.comparison;
+  if (Number.isFinite(cmp?.delta)) {
+    const pp = cmp.delta * 100;
+    lines.push(`latest paired delta (curiosity − control): ${pp >= 0 ? '+' : ''}${pp.toFixed(1)} points • ${String(cmp.interpretation || '').replaceAll('-', ' ')}`);
+  } else {
+    lines.push('Paired verdict: waiting until both branches reach the same audit checkpoint.');
+  }
+  if (audit.completed) lines.push('Both branches reached the target. No winner was promoted automatically; review the paired results, then End Audit when ready.');
+  else if (audit.active) lines.push(`ACTIVE ${String(audit.role || '').toUpperCase()}: ordinary Champion promotion is suspended until this audit ends.`);
+  else lines.push('Audit ended. Results are preserved in the checkpoint; no branch was automatically promoted.');
+  return lines.join('\n');
+}
+
 function pct(x) { return `${(Math.max(0, Math.min(1, Number(x) || 0)) * 100).toFixed(0)}%`; }
 function retentionLabel(status) {
   const label = String(status?.interpretation || 'unvalidated').replaceAll('-', ' ').toUpperCase();
@@ -476,8 +568,9 @@ function syncArchiveControls() {
     archiveNeedsRebaseline: session.archiveNeedsRebaseline,
     champions: Object.fromEntries(Object.keys(championMap).map(k => [k, session.getArchiveBrain(k)?.savedAtSteps ?? null])),
     hall: hall.map(x => [x.id, x.savedAtSteps]),
-    branches: branches.map(x => [x.id, x.frozenAtSteps]),
+    branches: branches.map(x => [x.id, x.frozenAtSteps, x.auditRole, x.curiosityRewardMode]),
     active: session.learnerLineage?.id,
+    audit: [session.curiosityAudit?.active, session.auditRole, session.curiosityRewardMode],
   });
   if (signature !== controlSignature) {
     controlSignature = signature;
@@ -514,7 +607,8 @@ function syncArchiveControls() {
     for (const branch of branches) {
       const option = document.createElement('option');
       option.value = branch.id;
-      option.textContent = `${branch.id} • frozen @ ${Number(branch.frozenAtSteps || 0).toLocaleString()} • ${Number(branch.learnerExperienceSteps || 0).toLocaleString()} branch steps`;
+      const auditTag = branch.auditRole ? ` • A/B ${branch.auditRole.toUpperCase()}` : '';
+      option.textContent = `${branch.id} • frozen @ ${Number(branch.frozenAtSteps || 0).toLocaleString()} • ${Number(branch.learnerExperienceSteps || 0).toLocaleString()} branch steps${auditTag}`;
       el.branchSelect.append(option);
     }
     if ([...el.branchSelect.options].some(o => o.value === priorBranchValue)) el.branchSelect.value = priorBranchValue;
@@ -525,9 +619,10 @@ function syncArchiveControls() {
   if (ref.type !== 'learner' && !ref.brain?.model) el.brainSource.value = 'latest';
   const currentRef = selectedBrainRef();
   const forkTarget = currentRef.type === 'learner' ? session.getArchiveBrain('balanced') : currentRef.brain;
-  el.restoreBest.disabled = session.archiveNeedsRebaseline || !forkTarget?.model;
+  const auditActive = Boolean(session.curiosityAudit?.active);
+  el.restoreBest.disabled = auditActive || session.archiveNeedsRebaseline || !forkTarget?.model;
   el.pinChampion.disabled = session.archiveNeedsRebaseline || currentRef.type !== 'champion' || !currentRef.brain?.model;
-  el.switchBranch.disabled = el.branchSelect.value === 'active' || !session.frozenLearners.some(x => x.id === el.branchSelect.value);
+  el.switchBranch.disabled = auditActive || el.branchSelect.value === 'active' || !session.frozenLearners.some(x => x.id === el.branchSelect.value);
 }
 
 function suiteText(name, r) {
@@ -681,6 +776,82 @@ el.restoreBest.addEventListener('click', () => {
   updateUI();
   setStatus(`New Learner ${event.lineageId} forked from ${sourceLabel}. Prior Learner ${event.preservedLineageId} is frozen and switchable.`);
 });
+el.curiosityMode.addEventListener('change', () => {
+  try {
+    session.setCuriosityRewardMode(el.curiosityMode.value);
+    updateUI();
+    setStatus(session.curiosityRewardMode === 'reward'
+      ? 'Curiosity reward influence ON. The predictor learns and its bounded intrinsic bonus is added to PPO training reward.'
+      : 'Curiosity OBSERVE-ONLY. The predictor still learns and all curiosity diagnostics still run, but PPO receives exactly zero intrinsic reward.');
+  } catch (e) {
+    el.curiosityMode.value = session.curiosityRewardMode;
+    setStatus(`Curiosity mode change blocked: ${e.message}`);
+  }
+});
+el.startCuriosityAudit.addEventListener('click', async () => {
+  if (session.curiosityAudit?.active) return;
+  if (!confirm(`Start the controlled Curiosity A/B audit from the CURRENT Learner @ ${session.totalSteps.toLocaleString()} steps? The current lineage will be frozen as the recoverable origin. Two matched descendants will be created: CONTROL (predictor learns, curiosity reward = 0) and CURIOSITY (current v0.1.3 reward). Each branch runs ${CONFIG.curiosityAudit.targetStepsPerBranch.toLocaleString()} steps with fixed read-only audit evaluations.`)) return;
+  paused = true;
+  el.pause.textContent = 'Resume';
+  try {
+    const existing = await loadCheckpointRecord('latest');
+    const storedSteps = Number(existing?.snapshot?.totalSteps || 0);
+    if (existing && storedSteps > session.totalSteps) {
+      setStatus(`A/B audit NOT started: your protected Manual Save has ${storedSteps.toLocaleString()} steps, newer than the current ${session.totalSteps.toLocaleString()}-step learner. Load Manual first so we do not audit the wrong brain.`);
+      await refreshSaveSlots();
+      return;
+    }
+    const saveStarted = performance.now();
+    await saveCheckpoint(session.snapshot(), 'latest');
+    await persistHallOfFame();
+    lastStorageDurationMs = performance.now() - saveStarted;
+    setStatus('Preserved the exact pre-audit learner. Building matched CONTROL and CURIOSITY descendants and running the read-only audit baseline…');
+    await yieldUI();
+    const audit = session.startCuriosityAudit();
+    await saveCheckpoint(session.snapshot(), 'autosave');
+    await refreshSaveSlots();
+    controlSignature = '';
+    el.brainSource.value = 'latest';
+    resetViewState();
+    updateUI();
+    setStatus(`Curiosity A/B audit ${audit.id} ready. CONTROL is active first with intrinsic reward exactly 0; predictor learning remains ON. Training is paused—press Resume or Learn when ready.`);
+  } catch (e) {
+    setStatus(`Curiosity A/B audit start failed: ${e.message}`);
+  }
+});
+el.switchCuriosityAudit.addEventListener('click', async () => {
+  const audit = session.curiosityAuditSummary();
+  if (!audit.active) return;
+  const nextRole = audit.role === 'control' ? 'curiosity' : 'control';
+  const currentProgress = audit.role === 'control' ? audit.controlProgress : audit.curiosityProgress;
+  if (currentProgress < audit.targetStepsPerBranch && !confirm(`${String(audit.role || '').toUpperCase()} has only ${Number(currentProgress).toLocaleString()} / ${Number(audit.targetStepsPerBranch).toLocaleString()} audit steps. Switch early to ${nextRole.toUpperCase()}? You can switch back later; the current branch will be frozen exactly.`)) return;
+  paused = true;
+  el.pause.textContent = 'Resume';
+  try {
+    const event = session.switchCuriosityAuditBranch(nextRole);
+    await saveCheckpoint(session.snapshot(), 'autosave');
+    controlSignature = '';
+    el.brainSource.value = 'latest';
+    resetViewState();
+    updateUI();
+    setStatus(`A/B switched to ${nextRole.toUpperCase()} (${event.lineageId}). Branch state, optimizer, predictor and RNG continuation restored. Training is paused—press Resume or Learn when ready.`);
+  } catch (e) { setStatus(`A/B branch switch failed: ${e.message}`); }
+});
+el.endCuriosityAudit.addEventListener('click', async () => {
+  const audit = session.curiosityAuditSummary();
+  if (!audit.active) return;
+  if (!confirm('End the curiosity A/B audit? No branch will be promoted automatically. The currently active policy remains the Learner and ordinary validation will be scheduled before continued training.')) return;
+  paused = true;
+  el.pause.textContent = 'Resume';
+  try {
+    session.endCuriosityAudit();
+    await saveCheckpoint(session.snapshot(), 'autosave');
+    controlSignature = '';
+    updateUI();
+    setStatus('Curiosity A/B audit ended. Results are preserved; no automatic winner was selected. Ordinary validation is scheduled for the active Learner before long training resumes.');
+  } catch (e) { setStatus(`Could not end curiosity audit: ${e.message}`); }
+});
+
 el.branchSelect.addEventListener('change', syncArchiveControls);
 el.switchBranch.addEventListener('click', () => {
   const id = el.branchSelect.value;

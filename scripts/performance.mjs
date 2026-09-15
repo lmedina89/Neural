@@ -16,7 +16,7 @@ for (let i = 0; i < measured; i++) transitions += session.trainRollout(rollout).
 const ms = performance.now() - t0;
 const last = session.metrics.at(-1)?.profile || {};
 console.log(JSON.stringify({
-  version: '0.1.3',
+  version: '0.1.3.1',
   seed,
   envCount,
   curriculum: 'Scarcity',

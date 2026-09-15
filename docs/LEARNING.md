@@ -1,30 +1,13 @@
-# What MicroMind learns — v0.1.3
+# What MicroMind learns — v0.1.3.1
 
-Programmed:
-- physics and procedural world rules;
-- observation/action definitions;
-- external task rewards;
-- curriculum and rehearsal schedule;
-- validation/Champion-selection protocols;
-- the curiosity model architecture and strict intrinsic-reward caps.
+Programmed are the physics/world rules, observation/action definitions, external rewards, curriculum/rehearsal schedule, validation protocols, curiosity predictor architecture, and strict intrinsic-reward caps.
 
-Learned by the 1,040-parameter policy brain:
-- recurrent hidden-state dynamics;
-- policy probabilities;
-- value estimates;
-- behavioral strategies.
+Learned by the **1,040-parameter policy** are recurrent hidden-state dynamics, policy probabilities, value estimates, and behavioral strategies. Learned separately by the **441-parameter predictor** is how the nine dynamic sensory values tend to change after each state/action pair.
 
-Learned by the new 441-parameter curiosity predictor:
-- how the nine dynamic sensory values tend to change after each state/action pair.
+v0.1.3.1 separates prediction learning from reward influence. In **Observe only**, the predictor continues learning and reporting real surprise, but that surprise contributes exactly zero reward to PPO. In **Reward ON**, the same bounded potential bonus is applied as in v0.1.3.
 
-No rule says "unfamiliar places are over there" or "turn toward novelty." The only new training information is the predictor's real error on experienced transitions.
+The matched A/B audit therefore asks a narrower causal question:
 
-## Familiarity and surprise
-At first the forward model predicts poorly. As repeated transitions become familiar, its error usually decreases. A transition that is unusually hard to predict relative to the recent baseline receives a larger novelty score.
+**Starting from the same brain and optimizer state, does adding prediction-surprise reward produce better external-task generalization than merely learning/observing the same predictor?**
 
-The novelty score is normalized, bounded, sampled sparsely, and episode-budgeted. This is intentionally conservative to reduce the risk of classic intrinsic-motivation pathologies such as seeking endlessly unpredictable events at the expense of the real task.
-
-## Scientific interpretation
-Curiosity is not consciousness, desire, or subjective interest. It is an intrinsic reinforcement signal derived from learned prediction error.
-
-The experiment asks a measurable question: **does adding a small prediction-surprise signal improve exploration and later external-task generalization compared with the pre-curiosity Champions?**
+Curiosity is not consciousness, desire, or subjective interest. It is an experimentally switchable reinforcement signal derived from learned prediction error.

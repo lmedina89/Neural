@@ -1,60 +1,65 @@
-# MicroMind v0.1.3 — Intrinsic Curiosity Foundation
+# MicroMind v0.1.3.1 — Curiosity Audit & Ablation
 
-MicroMind is a browser-based miniature AI research lab. A real **1,040-parameter recurrent actor-critic** learns with PPO in deterministic procedural worlds while its activations, decisions, memory, rewards, rehearsal, Champions, and generalization are inspectable.
+MicroMind is a browser-based miniature AI research lab. A real **1,040-parameter recurrent actor-critic** learns with PPO in procedural worlds while its activations, decisions, memory, rewards, rehearsal, Champions, and generalization are inspectable.
 
-v0.1.3 adds a separate **441-parameter learned forward-prediction model** that creates a small, bounded intrinsic curiosity signal during training.
+v0.1.3.1 does **not** add another intelligence feature. It turns the v0.1.3 curiosity layer into a controlled experiment so we can determine whether the intrinsic reward actually helps the policy.
 
-**Build:** `CURIOUS-013`
+**Build:** `CURAUD-0131`
 
-## What changed in v0.1.3
-The accepted v0.1.2.1 policy learner remains the control:
+## What stays fixed
 
-- policy architecture remains **1,040 parameters**;
-- PPO implementation and hyperparameters are unchanged;
-- observations/actions are unchanged;
-- external reward coefficients are unchanged;
-- physics/world generation are unchanged;
-- curriculum and rehearsal targets are unchanged;
-- Champion selection and every evaluation protocol are unchanged.
+The v0.1.3 learning problem remains the control:
 
-New capability:
+- policy architecture: **1,040 parameters**;
+- curiosity forward predictor: **441 parameters**;
+- PPO math/hyperparameters and external rewards unchanged;
+- observations/actions, physics, world generation, and rehearsal targets unchanged;
+- protected Champion/Hall archive unchanged;
+- validation, historical comparison, and final unseen evaluation remain curiosity-free.
 
-`current observation + chosen action → curiosity predictor → predicted next observation`
+## New: Observe-only curiosity
 
-The predictor learns the nine dynamic sensory values (the policy's tenth observation is a constant bias feature). Prediction error becomes **novelty**. Novel nonterminal transitions can add a tiny intrinsic bonus to PPO's training reward.
+Curiosity can now run in two influence modes:
 
-Safety/containment:
+- **Reward ON** — v0.1.3 behavior: the predictor learns and its bounded intrinsic bonus is added to PPO training reward.
+- **Observe only (reward 0)** — the predictor still learns, measures prediction error/novelty, and performs shadow budget accounting, but PPO receives **exactly zero** intrinsic reward.
 
-- curiosity is sampled every fourth transition to protect mobile throughput;
-- intrinsic reward is positive-only and tightly capped per step;
-- each episode has an absolute curiosity budget of **0.25 reward**;
-- terminal/death transitions receive **zero intrinsic bonus** even though the predictor still learns them;
-- curriculum promotion, training charts, validation, Compare Brains, and Unseen Test continue to use external task performance;
-- **all evaluations run with curiosity reward OFF**.
+This separates “the predictor works” from “the predictor improves behavior.”
 
-## Curiosity visualization
-The new Curiosity / Prediction screen is real instrumentation:
+## New: matched A/B audit
 
-- live prediction error;
-- normalized novelty;
-- actual intrinsic reward;
-- remaining episode curiosity budget;
-- predictor training loss;
-- predictor parameter count;
-- a live predictor graph showing real state/action inputs, hidden activity, predicted sensory outputs, actual next sensory values, and error rings;
-- a subtle world novelty trail driven by real prediction surprise from the current training environment.
+**Start Curiosity A/B Audit** freezes the exact current Learner as a recoverable origin and creates two descendants from the same policy weights, optimizer state, curiosity predictor, RNG state, curriculum state, and environment-seed cursor:
 
-As familiar transitions are learned, prediction error should generally fall. Unusual transitions can temporarily become more novel again.
+- **CONTROL** — curiosity predictor learns, intrinsic reward influence = 0;
+- **CURIOSITY** — current v0.1.3 intrinsic reward behavior.
 
-## Save migration
-v0.1.3 uses **checkpoint schema 7** and loads schemas 1–7.
+The audit freezes automatic curriculum movement, uses a separate read-only seed domain (`heldout:curiosity-ablation:v1`), evaluates every **500,000 branch-local steps**, and targets **2,000,000 steps per branch** by default.
 
-Loading a v0.1.2.1/schema-6 checkpoint preserves the policy, optimizer, Champions, lineages, Hall, rehearsal state, and experiment age. Because older versions had no curiosity model, the predictor begins fresh after migration. If the persistent Hall is empty, the existing Balanced Champion is pinned as a **pre-curiosity reference**.
+For experimental fairness, both branches use the same PPO schedule age at equal branch-local progress. Ordinary milestone saves and Champion promotion are suspended during the audit. **No A/B winner is automatically promoted or restored.**
+
+## Curiosity accounting
+
+The panel now exposes:
+
+- potential curiosity bonus;
+- applied curiosity bonus;
+- curiosity share of reward magnitude;
+- predictor error/loss and novelty;
+- budget reset count;
+- mean budget use per completed episode;
+- budget-exhaustion rate and approximate exhaustion point;
+- matched Control/Curiosity progress and paired evaluation results.
+
+Important correction from v0.1.3 UI wording: **`0.250 / 0.25` is budget remaining, not budget consumed.** A full `0.250` therefore means the episode has not spent its curiosity allowance yet. v0.1.3.1 labels this explicitly as **BUDGET REMAINING**.
+
+## Persistence
+
+v0.1.3.1 uses **checkpoint schema 8** and loads schemas 1–8. Schema 7 v0.1.3 saves migrate with curiosity reward ON and no active audit. Active A/B state, branch progress, branch-specific episode windows, predictor state, and reward-influence mode survive schema-8 save/reload.
 
 ## Run
+
 ```bash
 npm test
-npm run benchmark
 npm run performance
 npm run build
 python3 -m http.server 8080 --directory dist
@@ -62,4 +67,4 @@ python3 -m http.server 8080 --directory dist
 
 Then open `http://localhost:8080/`.
 
-GitHub Pages can serve the repository root directly.
+GitHub Pages can also serve the repository root directly.

@@ -14,7 +14,7 @@
         <div class="eyebrow">MICROMIND • LEARNING LABORATORY</div>
         <h1>Watch a tiny brain actually learn.</h1>
       </div>
-      <div class="build" id="buildTag">v0.1.2.1 • CHAMPEFF-0121</div>
+      <div class="build" id="buildTag">v0.1.3.1 • CURAUD-0131</div>
     </header>
 
     <section class="controls" aria-label="Main controls">
@@ -178,13 +178,46 @@
       <div class="curiosityGrid">
         <div><span>prediction error</span><b id="curiosityErrorVal">—</b></div>
         <div><span>novelty</span><b id="curiosityNoveltyVal">—</b></div>
-        <div><span>intrinsic bonus</span><b id="curiosityBonusVal">—</b></div>
-        <div><span>episode budget</span><b id="curiosityBudgetVal">—</b></div>
+        <div><span>potential bonus</span><b id="curiosityBonusVal">—</b></div>
+        <div><span>budget remaining</span><b id="curiosityBudgetVal">—</b></div>
         <div><span>predictor loss</span><b id="curiosityLossVal">—</b></div>
         <div><span>predictor size</span><b id="curiosityParamsVal">—</b></div>
       </div>
+      <div class="curiosityDiagnosticsGrid">
+        <div><span>reward influence</span><b id="curiosityInfluenceVal">—</b></div>
+        <div><span>applied bonus</span><b id="curiosityAppliedVal">—</b></div>
+        <div><span>reward magnitude share</span><b id="curiosityShareVal">—</b></div>
+        <div><span>budget resets</span><b id="curiosityResetsVal">—</b></div>
+        <div><span>mean budget used</span><b id="curiosityBudgetUseVal">—</b></div>
+        <div><span>budget exhausted</span><b id="curiosityExhaustVal">—</b></div>
+      </div>
       <canvas id="curiosityCanvas" aria-label="Curiosity predictor visualization"></canvas>
       <div class="curiosityInspect" id="curiosityInspect">Orange rings mark real prediction error. Tap an output node to inspect predicted versus actual sensory values.</div>
+      <div class="curiosityAuditBox">
+        <div class="curiosityAuditHead">
+          <div><strong>CURIOSITY A/B AUDIT</strong><span>same starting brain • fixed audit seeds • no Champion promotion</span></div>
+          <label>Influence
+            <select id="curiosityModeSelect" aria-label="Curiosity reward influence">
+              <option value="reward">Reward ON</option>
+              <option value="observe">Observe only (reward 0)</option>
+            </select>
+          </label>
+        </div>
+        <div class="curiosityAuditActions">
+          <button id="startCuriosityAuditBtn" title="Preserve the current learner, then create matched Control and Curiosity descendants from identical policy, optimizer, predictor, curriculum and RNG state.">Start 2M + 2M A/B Audit</button>
+          <button id="switchCuriosityAuditBtn" disabled title="Freeze this audit branch and continue the matched other branch.">Switch A/B Branch</button>
+          <button id="endCuriosityAuditBtn" disabled title="End the audit without promoting either branch. The currently active policy remains active.">End Audit</button>
+        </div>
+        <div class="curiosityAuditGrid">
+          <div><span>active branch</span><b id="curiosityAuditRoleVal">none</b></div>
+          <div><span>control progress</span><b id="curiosityControlProgressVal">—</b></div>
+          <div><span>curiosity progress</span><b id="curiosityRewardProgressVal">—</b></div>
+          <div><span>paired checkpoint</span><b id="curiosityPairCheckpointVal">—</b></div>
+          <div><span>control balanced</span><b id="curiosityControlScoreVal">—</b></div>
+          <div><span>curiosity balanced</span><b id="curiosityRewardScoreVal">—</b></div>
+        </div>
+        <div id="curiosityAuditResults" class="curiosityAuditResults">Audit idle. Start it only after loading/saving the learner you want to preserve as the experiment origin.</div>
+      </div>
     </section>
 
     <section class="panel skillPanel">
@@ -197,7 +230,7 @@
       <div id="resultsText" class="resultsText">No evaluation run yet.</div>
     </section>
 
-    <footer>MicroMind v0.1.3 adds a bounded learned curiosity signal to the accepted continual-learning foundation. The 1,040-parameter policy/PPO system and all evaluation protocols remain intact; curiosity is training-only and disabled during evaluation.</footer>
+    <footer>MicroMind v0.1.3.1 audits curiosity instead of assuming it helps: observe-only ablation, episode accounting, and matched Control/Curiosity branches use a separate read-only evaluation domain. The 1,040-parameter policy and protected Champion archive remain intact.</footer>
   </main>
   <script type="module" src="./src/app/main.js"></script>
 </body>

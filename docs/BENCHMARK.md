@@ -1,43 +1,26 @@
-# v0.1.3 benchmark
+# v0.1.3.1 benchmark / audit notes
 
-## Baseline containment
-Built from exact packaged v0.1.2.1 `CHAMPEFF-0121`.
+## Baseline
 
-The following core files are byte-for-byte unchanged from that baseline:
-- `src/ai/model.js`
-- `src/ai/ppo.js`
-- `src/ai/rollout.js`
-- `src/sim/world.js`
-- `src/sim/curriculum.js`
-- `src/evaluation/evaluator.js`
+Built directly from exact packaged v0.1.3 `CURIOUS-013` (SHA-256 `df786484b710936674436a61912d5914b0c9e154975d5a58922a35affd9ef19b`). Policy architecture, PPO implementation, world physics/rewards, curriculum definitions, and evaluation math are unchanged.
 
-This keeps the 1,040-parameter policy architecture, PPO math, external reward, world rules, curriculum, and evaluation protocols fixed while curiosity is added around the training reward stream.
+## What is benchmarked now
 
-## Predictor-learning sanity evidence
-In the 80,128-step release run at the hardest curriculum with continual rehearsal:
+This release is an experimental-control release. Its most important performance property is that observe-only curiosity retains predictor learning without adding intrinsic reward, and that matched CONTROL/CURIOSITY descendants receive equal branch-local schedules and fixed audit evaluation seeds.
 
-- mean sampled prediction error near 10k steps: **0.3188**
-- mean sampled prediction error near 80k steps: **0.0331**
-- predictor batch loss near 10k: **0.15938**
-- predictor batch loss near 80k: **0.01656**
+Automated tests cover those invariants directly.
 
-The intrinsic bonus remained small (roughly `0.0001–0.00025` averaged across all training transitions in the sampled checkpoints) while the predictor learned familiar dynamics.
+## Development throughput smoke
 
-External all-skills behavior also improved versus the random initial policy in this short run:
-- initial generalization: **0.5%**
-- final Learner generalization: **11.4%**
-- protected Champion generalization: **15.5%**
+Headless Node, 8 environments, Scarcity stage, rollout 36:
 
-This is a short sanity run, not a claim that curiosity beats the pre-curiosity system after only 80k transitions. The physical multi-million-step comparison is the meaningful experiment.
+- wall-clock: **45,824 steps/sec**;
+- last-profile simulation: **142,403 steps/sec**;
+- PPO: **3.47 ms/update**;
+- curiosity predictor update: **0.20 ms/update**.
 
-## Throughput containment
-Headless Node, identical performance workload, five fresh processes each:
-
-- exact v0.1.2.1 median wall-clock throughput: **31,884 steps/sec**
-- v0.1.3 median wall-clock throughput: **29,965 steps/sec**
-- development-machine median change: **about -6.0%**
-
-Curiosity uses one-step prediction samples every fourth environment transition and one predictor optimizer batch per rollout to keep overhead bounded. This benchmark is not an iPhone performance claim; physical Safari is the acceptance authority.
+These numbers are environment-specific and are not compared directly with earlier five-process release medians. Physical iPhone Safari remains the performance authority.
 
 ## Evaluation isolation
-Automated tests and source audits verify that validation, comparison, and final-heldout evaluation do not import/use the curiosity module or intrinsic reward. Champion promotion therefore remains based on the original external-task evaluation protocol.
+
+Normal validation, historical comparison, final unseen testing, and the new curiosity-ablation evaluation all score external behavior with curiosity reward OFF. The A/B result stream is observational and cannot promote the protected Champion.

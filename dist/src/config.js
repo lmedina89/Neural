@@ -1,5 +1,5 @@
-export const VERSION = '0.1.3';
-export const BUILD_MARKER = 'CURIOUS-013';
+export const VERSION = '0.1.3.1';
+export const BUILD_MARKER = 'CURAUD-0131';
 
 export const CONFIG = Object.freeze({
   world: {
@@ -64,6 +64,16 @@ export const CONFIG = Object.freeze({
     normalizationWarmupSamples: 512,
     noveltyBaseline: 0.05,
     noveltySigmaSpan: 2.5,
+  },
+  curiosityAudit: {
+    // Controlled A/B ablation: both descendants begin from the exact same policy,
+    // optimizer, predictor, curriculum state, environment cursor and action RNG.
+    // The CONTROL branch keeps the predictor learning/observing but applies zero
+    // intrinsic reward to PPO. The CURIOSITY branch preserves v0.1.3 behavior.
+    seedBase: 'heldout:curiosity-ablation:v1',
+    episodesPerStage: 8,
+    checkpointInterval: 500_000,
+    targetStepsPerBranch: 2_000_000,
   },
   ppo: {
     gamma: 0.985,
