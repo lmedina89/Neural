@@ -1,4 +1,4 @@
-# Architecture — v0.1.3.2
+# Architecture — v0.1.4.1.1
 
 ## Policy learner
 
@@ -12,31 +12,38 @@ The policy has **1,040 learned parameters** and remains on the same recurrent PP
 
 The auxiliary forward model has **441 learned parameters**. It predicts the next sensory state and learns from real transitions. It does not choose actions directly and is never used to score evaluation performance.
 
-## Reward influence modes and preserved A/B audit
+## Validation confidence layer
 
-Curiosity still supports `reward` and `observe` modes. The v0.1.3.1 matched CONTROL/CURIOSITY audit remains fully available and its results persist; v0.1.3.2 does not retune it.
+Routine Champion/retention validation still uses `validation:v3` with 12 seeded-stochastic episodes per skill. Each validation checkpoint now stores the exact active policy as the next same-lineage comparison reference.
+
+If balanced performance drops >=10 points or an individual skill drops >=15 points versus the previous checkpoint, `validation:confidence:v1` runs a larger paired replay. Current and reference policies receive identical fixed environment seeds and action-randomness streams. Paired per-episode skill-score differences are summarized with a 95% confidence interval. `CONFIRMED REGRESSION` requires both a material negative paired mean and an upper confidence bound below zero. Otherwise the suspicious raw event is `LIKELY NOISE` (or `MEASURED DROP` when no compatible reference exists yet).
+
+This layer is observational. It never restores weights, changes rewards, alters curriculum, or promotes a Champion.
+
+
+## Rear-target / rotation audit
+
+`orientation-audit:v1` is a manual, read-only diagnostic domain. It creates temporary empty-arena `World` instances and places one food target at fixed bearings around an agent that starts from rest. It uses the normal 10-value observation, normal stochastic policy sampling, recurrent hidden-state updates, and normal angular dynamics. No training transition is stored and no policy/optimizer/predictor/session state is updated.
+
+The audit reports facing success, target reach, cumulative angular travel, a conservative spin-incidence threshold, BRAKE selection while angular speed is already substantial, and initial policy preference at each bearing. Because food relative X/Y is always present in the current observation, this audit specifically measures turn-control behavior rather than visual object permanence.
 
 ## Stability observatory
 
-The PPO trainer exposes diagnostic values from the same update it already performs: losses, KL, clip fraction, advantage distribution, rollout critic explained variance, gradient norms/clipping, and parameter movement. Session-level telemetry is downsampled every 50k global steps.
-
-Ordinary validation can emit a compact regression event when a balanced score falls >=10 points or an individual skill falls >=15 points versus the previous validation on the same lineage. Events include the preceding stability-window summary and are strictly observational.
+PPO diagnostics remain read-only: losses, KL, clip fraction, advantage distribution, critic explained variance, gradient norms/clipping, and parameter movement. Regression events now retain the confidence-audit verdict alongside the preceding PPO window.
 
 ## Data separation
 
 - training: `train:*`
-- Champion validation: `validation:v3` — curiosity reward OFF
+- ordinary Champion/retention validation: `validation:v3` — curiosity reward OFF
+- paired regression confirmation: `validation:confidence:v1` — curiosity reward OFF
 - historical comparison: `heldout:compare:v2` — curiosity reward OFF
 - curiosity A/B audit: `heldout:curiosity-ablation:v1` — curiosity reward OFF
 - final diagnostic: `heldout:final:v2` — curiosity reward OFF
 
 ## Persistence
 
-Schema 9 stores the prior schema-8 curiosity/A/B state plus active-lineage stability history, regression events, and the next capture point. Frozen learner branches keep their own telemetry. Schemas 1–9 load; schema 8 migrates with empty stability history and otherwise preserves its exact state.
+Schema **10** adds the previous-validation policy reference and bounded validation-confidence history to schema 9. Schemas 1–10 load. Schema-9 migration starts with no invented confirmation evidence; the first same-lineage v0.1.4.1+ validation establishes a fresh paired reference. The rear-target audit adds no persistent fields, so schema remains 10.
 
+## Cognitive Observatory
 
-## v0.1.3.3 Neural Flow & Cognitive FX
-
-The visualization layer is deliberately read-only. `NeuralRenderer` receives the policy model plus its real forward-pass snapshot and derives edge activity from actual observations, hidden activations, recurrent weights, policy/value weights, action probabilities, and value estimates. `WorldRenderer` receives normalized sensor-influence values and the current dominant policy action to draw world-linked salience and decision light cues. `CuriosityRenderer` visualizes the learned forward model's real predicted-versus-actual next-sensory state and prediction error.
-
-The new **Cognitive Flow** mode adds moving pulses, recurrent-memory arcs, a data-driven decision beam, and a multi-ring cognitive halo. The halo is not a second model: its confidence, novelty, and reward modulation are derived from existing runtime telemetry. No visualization code updates policy weights, optimizer state, curiosity parameters, curriculum state, Champions, or checkpoints.
+LIVE, PREDICT, MEMORY, HISTORY and RESEARCH remain read-only visualization surfaces. Off-screen heavy canvases sleep independently. Cognitive Flow, Prediction Echo, Attention Fields, Memory Constellation, Experience Ripples, History/Lineage and runtime-throughput diagnostics do not update policy or optimizer state.

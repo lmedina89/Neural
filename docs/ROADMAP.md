@@ -1,16 +1,17 @@
 # Roadmap
 
-Current: **v0.1.3.2 — Continual Learning Stability Observatory**.
-
-The v0.1.3.1 matched curiosity A/B test did not show a durable final advantage for either reward-on curiosity or the reward-zero control, and both branches showed checkpoint volatility. Curiosity therefore stays unchanged while the underlying continual PPO learner is instrumented.
+Current diagnostic milestone: **v0.1.4.1.1 — Rear-Target & Rotation Audit**.
 
 Immediate acceptance goal:
-1. preserve the current learner, Champion, Hall, frozen A/B branches, and curiosity state through schema-9 migration;
-2. verify compact/collapsible iPhone UI and no Safari focus-zoom regression;
-3. let the same learner continue roughly 2–3M steps without retuning;
-4. capture PPO telemetry through at least one ordinary validation swing if one occurs;
-5. inspect KL/clip pressure, critic loss/explained variance, gradient behavior, parameter movement, and per-skill deltas before choosing any learning change.
+1. deploy on top of v0.1.4.1 without changing the saved Learner;
+2. load the long-running Learner and run the fixed rear-target audit;
+3. compare Learner and Balanced Champion at the same target bearings;
+4. determine whether the failure is dominated by rear-bearing action selection, angular overshoot/spin, BRAKE use while rotating, or a broader inability to orient;
+5. preserve the current brain while collecting this evidence;
+6. only then select one targeted mechanism for v0.1.4.2.
 
-Only after evidence identifies a likely mechanism should v0.1.3.3 change one learning variable at a time. Candidate experiments include stricter update guards, critic stabilization, or interference/retention changes—but none are approved until the observatory data points to them.
+The v0.1.4.1 **Validation Confidence & True Regression Audit** remains intact underneath this diagnostic build. Its longer-run goal remains to separate noisy validation swings from defensible continual-learning regression evidence.
 
-Longer-term candidates remain world-model/predictive memory, primitive imagination/planning, richer delayed-memory tasks, and controlled policy-capacity experiments.
+Next: **v0.1.4.2 — Targeted Continual-Learning / Turn-Control Fix**. Change exactly one mechanism supported by the collected evidence, not several systems at once.
+
+After stability is understood: **v0.1.5.0 — World Model / Imagination Foundation**, followed by controlled imagination/planning and richer memory work.

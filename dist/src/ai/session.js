@@ -2,7 +2,7 @@ import { BUILD_MARKER, CONFIG, VERSION } from '../config.js';
 import { domainSeed, PRNG } from '../utils/prng.js';
 import { CURRICULUM, CurriculumManager } from '../sim/curriculum.js';
 import { World } from '../sim/world.js';
-import { evaluateFullRetentionSuite } from '../evaluation/evaluator.js';
+import { evaluateFullRetentionSuite, evaluatePairedRetentionDelta } from '../evaluation/evaluator.js';
 import { RecurrentActorCritic } from './model.js';
 import { CuriosityModule } from './curiosity.js';
 import { PPOTrainer } from './ppo.js';
@@ -29,6 +29,8 @@ export class TrainingSession {
     this.bestBrain = null;
     this.bestArchive = {};
     this.validationHistory = [];
+    this.validationConfidenceHistory = [];
+    this.validationReference = null;
     this.legacyValidationHistory = [];
     this.lastValidationStep = -1;
     this.nextValidationStep = nextValidationAfter(0);
@@ -475,7 +477,7 @@ export class TrainingSession {
     };
   }
 
-  noteValidationStability(validation, previousValidation = null, previousRecord = null) {
+  noteValidationStability(validation, previousValidation = null, previousRecord = null, confidenceAudit = null) {
     const currentBalanced = Number(validation?.categoryScores?.balanced);
     const previousBalanced = Number(previousRecord?.validation?.categoryScores?.balanced);
     const balancedDelta = Number.isFinite(currentBalanced) && Number.isFinite(previousBalanced)
@@ -505,6 +507,7 @@ export class TrainingSession {
         preValidationWindow: this.stabilityWindowSummary(),
         rehearsalMix: this.recentRehearsalMix(),
         curiosityRewardMode: this.curiosityRewardMode,
+        validationConfidence: confidenceAudit ? cloneSerializable(confidenceAudit) : null,
       };
       this.stabilityEvents.push(event);
       if (this.stabilityEvents.length > CONFIG.stability.eventHistory) this.stabilityEvents.shift();
@@ -651,6 +654,8 @@ export class TrainingSession {
       curiosityBudgetResets: 0,
       auditRole: role,
       auditId,
+      validationConfidenceHistory: [],
+      validationReference: null,
     });
 
     const curiosityBranch = makeAuditFrozen(curiosityLineage, 'curiosity', 'reward');
@@ -673,6 +678,8 @@ export class TrainingSession {
     this.learnerLineage = controlLineage;
     this.learnerExperienceSteps = 0;
     this.episodeHistory = [];
+    this.validationConfidenceHistory = [];
+    this.validationReference = null;
     this.curiosityRewardMode = 'observe';
     this.auditRole = 'control';
     this.curiosityEpisodeHistory = [];
@@ -863,29 +870,40 @@ export class TrainingSession {
 
     const priorBalanced = this.getArchiveBrain('balanced');
     const priorBalancedScore = priorBalanced?.validation?.categoryScores?.balanced ?? null;
+    const confidenceAudit = this.runValidationConfidenceAudit(validation);
     const skillAssessment = assessSkillRetention(
       validation.stageResults,
       this.skillBestRecords,
       this.skillRegressionStreaks,
     );
     this.skillRegressionStreaks = skillAssessment.streaks;
+    const confidenceByStage = new Map((confidenceAudit.skills || []).map(x => [x.stage, x]));
+    for (const alert of skillAssessment.alerts) {
+      const confidence = confidenceByStage.get(alert.stage);
+      alert.confidenceLabel = confidence?.classification || 'measured-drop';
+      // v0.1.4.1 reserves CONFIRMED for a paired fixed-seed confirmation pass.
+      // Consecutive noisy point estimates may keep a WATCH alive, but do not earn
+      // the stronger label by streak alone anymore.
+      alert.confirmed = confidence?.classification === 'confirmed-regression';
+    }
 
     const currentBalanced = validation.categoryScores.balanced;
     const deltaFromBest = priorBalancedScore == null ? null : currentBalanced - priorBalancedScore;
     const balancedEvidence = priorBalancedScore != null && balancedRegressionEvidence(validation, priorBalanced.validation);
     this.balancedRegressionStreak = balancedEvidence ? this.balancedRegressionStreak + 1 : 0;
-    const balancedConfirmed = balancedEvidence && this.balancedRegressionStreak >= CONFIG.validation.balancedConfirmationCount;
+    const balancedConfirmed = confidenceAudit.balanced?.classification === 'confirmed-regression';
 
     const skillImprovements = detectSkillImprovements(validation.stageResults, this.skillBestRecords);
     const confirmedCatastrophic = skillAssessment.alerts.filter(x => x.confirmed && x.severity === 'catastrophic');
     const confirmedAlerts = skillAssessment.alerts.filter(x => x.confirmed);
     let interpretation = 'healthy';
-    if (balancedConfirmed || confirmedCatastrophic.length >= 2) interpretation = 'confirmed-regression-observed';
+    if (confidenceAudit.label === 'confirmed-regression' || balancedConfirmed || confirmedCatastrophic.length >= 2) interpretation = 'confirmed-regression';
+    else if (confidenceAudit.label === 'likely-noise') interpretation = 'likely-noise';
     else if (confirmedAlerts.length && !balancedEvidence && skillImprovements.length) interpretation = 'confirmed-specialization';
-    else if (confirmedAlerts.length) interpretation = 'confirmed-skill-regression-observed';
+    else if (confirmedAlerts.length) interpretation = 'confirmed-skill-regression';
     else if (skillAssessment.alerts.length && !balancedEvidence && skillImprovements.length) interpretation = 'specialization-watch';
-    else if (skillAssessment.alerts.length) interpretation = 'skill-regression-watch';
-    else if (balancedEvidence) interpretation = 'balanced-regression-watch';
+    else if (skillAssessment.alerts.length) interpretation = 'measured-drop';
+    else if (balancedEvidence) interpretation = 'measured-drop';
 
     const currentCandidate = this.makeCandidate(validation, 'learner');
     const promotion = this.considerCandidate(currentCandidate);
@@ -898,14 +916,16 @@ export class TrainingSession {
     const improved = archiveUpdates.includes('balanced');
     const regression = balancedEvidence;
     const autoRollback = null; // v0.1.2: behavioral regression is observed, never auto-restored.
-    const stabilityDeltas = this.noteValidationStability(validation, previousSkillValidation, previousValidationRecord);
+    const stabilityDeltas = this.noteValidationStability(validation, previousSkillValidation, previousValidationRecord, confidenceAudit);
 
     this.retentionStatus = {
       alerts: skillAssessment.alerts,
       forgetting: skillAssessment.alerts,
-      healthy: skillAssessment.alerts.length === 0 && !balancedEvidence,
+      healthy: confidenceAudit.label === 'stable' && skillAssessment.alerts.length === 0 && !balancedEvidence,
       interpretation,
-      confirmed: balancedConfirmed || confirmedAlerts.length > 0,
+      confirmed: confidenceAudit.label === 'confirmed-regression',
+      confidenceLabel: confidenceAudit.label,
+      confidenceAudit,
       balancedEvidence,
       balancedConfirmed,
       balancedRegressionStreak: this.balancedRegressionStreak,
@@ -928,6 +948,7 @@ export class TrainingSession {
       forgetting: skillAssessment.alerts,
       skillImprovements,
       interpretation,
+      confidenceAudit,
       archiveUpdates,
       promotionPending: promotion.pending,
       autoRollback,
@@ -939,6 +960,15 @@ export class TrainingSession {
     };
     this.validationHistory.push(record);
     if (this.validationHistory.length > 64) this.validationHistory.shift();
+    this.validationConfidenceHistory.push(cloneSerializable(confidenceAudit));
+    if (this.validationConfidenceHistory.length > CONFIG.validationConfidence.historySize) this.validationConfidenceHistory.shift();
+    this.validationReference = {
+      steps: this.totalSteps,
+      episodes: this.totalEpisodes,
+      lineageId: this.learnerLineage?.id || null,
+      validation: cloneSerializable(validation),
+      model: this.model.serialize(),
+    };
     this.lastValidationStep = this.totalSteps;
     const regularNextValidation = nextValidationAfter(this.totalSteps);
     const needsFollowup = Boolean(skillAssessment.alerts.length || balancedEvidence || promotion.pending.length);
@@ -946,6 +976,90 @@ export class TrainingSession {
       ? Math.min(regularNextValidation, this.totalSteps + CONFIG.validation.watchValidationInterval)
       : regularNextValidation;
     return record;
+  }
+
+  runValidationConfidenceAudit(validation) {
+    const lineageId = this.learnerLineage?.id || null;
+    const reference = this.validationReference;
+    const previous = reference?.validation;
+    const raw = measuredValidationDrops(validation, previous);
+    const base = {
+      atSteps: this.totalSteps,
+      lineageId,
+      referenceSteps: reference?.steps ?? null,
+      referenceLineageId: reference?.lineageId ?? null,
+      protocol: `${CONFIG.validationConfidence.seedBase}|paired-confirmation-v1`,
+      episodesPerStage: CONFIG.validationConfidence.episodesPerStage,
+      rawBalancedDelta: raw.balancedDelta,
+      rawSkillDeltas: raw.skillDeltas,
+      measured: raw.measured,
+      label: raw.measured ? 'measured-drop' : 'stable',
+      balanced: raw.balancedTriggered ? { classification: 'measured-drop', rawDelta: raw.balancedDelta } : null,
+      skills: raw.skillDeltas.filter(x => x.triggered).map(x => ({ ...x, classification: 'measured-drop', rawDelta: x.delta })),
+      paired: null,
+    };
+
+    if (!reference?.model || !previous || reference.lineageId !== lineageId) {
+      return {
+        ...base,
+        label: raw.measured ? 'measured-drop' : 'baseline-established',
+        note: reference?.lineageId && reference.lineageId !== lineageId
+          ? 'Previous validation belongs to another learner lineage; paired confirmation waits for a same-lineage reference.'
+          : 'Paired validation baseline established. The next suspicious same-lineage checkpoint can be confirmed against these exact weights.',
+      };
+    }
+    if (!raw.measured) return { ...base, label: 'stable', note: 'No suspicious raw checkpoint drop; expensive confirmation was not needed.' };
+
+    const stageIndexes = raw.balancedTriggered
+      ? CURRICULUM.map((_, i) => i)
+      : raw.skillDeltas.filter(x => x.triggered).map(x => x.stage);
+    const referenceModel = new RecurrentActorCritic(1);
+    referenceModel.restore(reference.model);
+    const paired = evaluatePairedRetentionDelta(this.model, referenceModel, {
+      stageIndexes,
+      episodesPerStage: CONFIG.validationConfidence.episodesPerStage,
+      seedBase: CONFIG.validationConfidence.seedBase,
+      deterministic: false,
+    });
+    const pairByStage = new Map(paired.stageResults.map(x => [x.stage, x]));
+    const skills = raw.skillDeltas.filter(x => x.triggered).map(x => {
+      const pair = pairByStage.get(x.stage);
+      if (!pair) return { ...x, rawDelta: x.delta, classification: 'measured-drop' };
+      const confirmed = pair.delta <= -CONFIG.validationConfidence.minConfirmedSkillDrop && pair.ciHigh < 0;
+      return {
+        ...x,
+        rawDelta: x.delta,
+        pairedDelta: pair.delta,
+        ciLow: pair.ciLow,
+        ciHigh: pair.ciHigh,
+        episodes: pair.episodes,
+        classification: confirmed ? 'confirmed-regression' : 'likely-noise',
+      };
+    });
+    let balanced = null;
+    if (raw.balancedTriggered) {
+      const confirmed = paired.balancedDelta <= -CONFIG.validationConfidence.minConfirmedBalancedDrop && paired.balancedCiHigh < 0;
+      balanced = {
+        classification: confirmed ? 'confirmed-regression' : 'likely-noise',
+        rawDelta: raw.balancedDelta,
+        pairedDelta: paired.balancedDelta,
+        ciLow: paired.balancedCiLow,
+        ciHigh: paired.balancedCiHigh,
+        episodes: paired.episodesPerStage * paired.stageIndexes.length,
+      };
+    }
+    const verdicts = [...skills.map(x => x.classification), ...(balanced ? [balanced.classification] : [])];
+    const label = verdicts.includes('confirmed-regression') ? 'confirmed-regression' : 'likely-noise';
+    return {
+      ...base,
+      label,
+      balanced,
+      skills,
+      paired,
+      note: label === 'confirmed-regression'
+        ? 'At least one drop survived the larger paired fixed-seed confirmation pass.'
+        : 'The raw drop did not survive the larger paired fixed-seed confirmation pass strongly enough to call true regression.',
+    };
   }
 
   makeCandidate(validation, source = 'learner', base = null) {
@@ -1170,6 +1284,8 @@ export class TrainingSession {
       stabilityHistory: cloneSerializable(this.stabilityHistory),
       stabilityEvents: cloneSerializable(this.stabilityEvents),
       nextStabilityCaptureStep: this.nextStabilityCaptureStep,
+      validationConfidenceHistory: cloneSerializable(this.validationConfidenceHistory),
+      validationReference: cloneSerializable(this.validationReference),
     };
     const idx = this.frozenLearners.findIndex(x => x.id === lineageId);
     if (idx >= 0) this.frozenLearners[idx] = entry;
@@ -1198,6 +1314,8 @@ export class TrainingSession {
     this.balancedRegressionStreak = 0;
     this.retentionStatus = defaultRetentionStatus();
     this.lastSkillValidation = null;
+    this.validationConfidenceHistory = [];
+    this.validationReference = null;
     this.lastValidationStep = -1;
     this.nextValidationStep = this.totalSteps;
   }
@@ -1303,6 +1421,10 @@ export class TrainingSession {
     this.nextStabilityCaptureStep = Number.isFinite(Number(target.nextStabilityCaptureStep))
       ? Number(target.nextStabilityCaptureStep)
       : nextStabilityCaptureAfter(this.totalSteps);
+    this.validationConfidenceHistory = Array.isArray(target.validationConfidenceHistory)
+      ? cloneSerializable(target.validationConfidenceHistory).slice(-CONFIG.validationConfidence.historySize)
+      : [];
+    this.validationReference = target.validationReference ? cloneSerializable(target.validationReference) : null;
     this.learnerLineage = structuredLineage(target.lineage) || this.learnerLineage;
     this.learnerExperienceSteps = Math.max(0, Number(target.learnerExperienceSteps) || 0);
     if (!this.curiosityAudit?.active) this.resetBranchValidationState();
@@ -1326,7 +1448,7 @@ export class TrainingSession {
 
   snapshot() {
     return {
-      schema: 9,
+      schema: 10,
       seed: this.seed,
       totalSteps: this.totalSteps,
       totalEpisodes: this.totalEpisodes,
@@ -1349,6 +1471,8 @@ export class TrainingSession {
       bestBrain: this.bestBrain,
       bestArchive: this.bestArchive,
       validationHistory: this.validationHistory,
+      validationConfidenceHistory: this.validationConfidenceHistory,
+      validationReference: this.validationReference,
       legacyValidationHistory: this.legacyValidationHistory,
       lastValidationStep: this.lastValidationStep,
       nextValidationStep: this.nextValidationStep,
@@ -1378,13 +1502,17 @@ export class TrainingSession {
   }
 
   restore(data) {
-    if (!data || ![1, 2, 3, 4, 5, 6, 7, 8, 9].includes(data.schema)) throw new Error('Unsupported checkpoint schema');
+    if (!data || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(data.schema)) throw new Error('Unsupported checkpoint schema');
     this.seed = data.seed;
     this.actionRng = new PRNG(this.seed ^ 0xa5a5a5a5);
     this.hallOfFame = [];
     this.nextHallOfFameId = 1;
     this.frozenLearners = [];
     this.learnerExperienceSteps = 0;
+    this.validationConfidenceHistory = data.schema >= 10 && Array.isArray(data.validationConfidenceHistory)
+      ? cloneSerializable(data.validationConfidenceHistory).slice(-CONFIG.validationConfidence.historySize)
+      : [];
+    this.validationReference = data.schema >= 10 && data.validationReference ? cloneSerializable(data.validationReference) : null;
     this.stabilityHistory = data.schema >= 9 && Array.isArray(data.stabilityHistory)
       ? cloneSerializable(data.stabilityHistory).slice(-CONFIG.stability.historyPoints)
       : [];
@@ -1418,7 +1546,7 @@ export class TrainingSession {
       : nextHistoricalMilestoneAfter(this.totalSteps);
     if (data.schema === 1 && this.totalSteps > 0 && !this.milestones.has(this.totalSteps)) this.saveMilestone(this.totalSteps);
 
-    if (data.schema === 9 || data.schema === 8 || data.schema === 7 || data.schema === 6 || data.schema === 5) {
+    if (data.schema === 10 || data.schema === 9 || data.schema === 8 || data.schema === 7 || data.schema === 6 || data.schema === 5) {
       this.bestArchive = data.bestArchive && typeof data.bestArchive === 'object' ? data.bestArchive : {};
       this.bestBrain = this.bestArchive.balanced || data.bestBrain || null;
       this.validationHistory = Array.isArray(data.validationHistory) ? data.validationHistory.slice(-64) : [];
@@ -1649,6 +1777,35 @@ function pairedAuditComparison(results) {
   };
 }
 
+function measuredValidationDrops(current, previous) {
+  const currentBalanced = Number(current?.categoryScores?.balanced ?? current?.balancedScore);
+  const previousBalanced = Number(previous?.categoryScores?.balanced ?? previous?.balancedScore);
+  const balancedDelta = Number.isFinite(currentBalanced) && Number.isFinite(previousBalanced)
+    ? currentBalanced - previousBalanced
+    : null;
+  const balancedTriggered = Number.isFinite(balancedDelta) && balancedDelta <= -CONFIG.validationConfidence.balancedDropTrigger;
+  const priorStages = new Map((previous?.stageResults || []).map(x => [x.stage, x]));
+  const skillDeltas = (current?.stageResults || []).map(stage => {
+    const prior = priorStages.get(stage.stage);
+    const priorScore = Number(prior?.skillScore);
+    const delta = Number.isFinite(priorScore) ? Number(stage.skillScore) - priorScore : null;
+    return {
+      stage: stage.stage,
+      name: stage.name,
+      previous: Number.isFinite(priorScore) ? priorScore : null,
+      current: Number(stage.skillScore),
+      delta,
+      triggered: Number.isFinite(delta) && delta <= -CONFIG.validationConfidence.skillDropTrigger,
+    };
+  });
+  return {
+    balancedDelta,
+    balancedTriggered,
+    skillDeltas,
+    measured: Boolean(balancedTriggered || skillDeltas.some(x => x.triggered)),
+  };
+}
+
 export function assessSkillRetention(stageResults, bestRecords, priorStreaks = []) {
   const alerts = [];
   const streaks = Array(CURRICULUM.length).fill(0);
@@ -1677,7 +1834,9 @@ export function assessSkillRetention(stageResults, bestRecords, priorStreaks = [
       drop,
       severity,
       streak: streaks[stage.stage],
-      confirmed: streaks[stage.stage] >= CONFIG.validation.confirmationCount,
+      repeatObserved: streaks[stage.stage] >= CONFIG.validation.confirmationCount,
+      // v0.1.4.1 reserves the word CONFIRMED for the paired fixed-seed audit.
+      confirmed: false,
       confidenceSeparated,
     });
   }
@@ -1843,8 +2002,16 @@ function compactValidation(record) {
     score: record.validation.score,
     bestScore: record.bestScore,
     bestSteps: record.bestSteps,
-    forgetting: record.forgetting.map(x => x.stage),
+    forgetting: record.forgetting.map(x => ({
+      stage: x.stage,
+      name: x.name,
+      severity: x.severity,
+      streak: x.streak,
+      confirmed: Boolean(x.confirmed),
+      confidenceLabel: x.confidenceLabel || null,
+    })),
     interpretation: record.interpretation,
+    confidenceAudit: record.confidenceAudit ? cloneSerializable(record.confidenceAudit) : null,
     balancedConfirmed: record.balancedConfirmed,
     archiveUpdates: record.archiveUpdates,
     promotionPending: record.promotionPending || [],

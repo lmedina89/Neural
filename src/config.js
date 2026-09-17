@@ -1,5 +1,5 @@
-export const VERSION = '0.1.4.0.4';
-export const BUILD_MARKER = 'DECHUD-01404';
+export const VERSION = '0.1.4.1.1';
+export const BUILD_MARKER = 'ROTAUD-01411';
 
 export const CONFIG = Object.freeze({
   world: {
@@ -140,6 +140,19 @@ export const CONFIG = Object.freeze({
     championPromotionMargin: 0.006,
     schedule: [10000, 50000, 100000, 250000, 500000, 750000, 1000000],
     intervalAfterSchedule: 250000,
+  },
+  validationConfidence: {
+    // Observational paired confirmation pass. Ordinary validation remains cheap;
+    // only suspicious drops are re-tested on a larger fixed-seed sample against
+    // the exact previous validation checkpoint from the same learner lineage.
+    seedBase: 'validation:confidence:v1',
+    episodesPerStage: 24,
+    balancedDropTrigger: 0.10,
+    skillDropTrigger: 0.15,
+    minConfirmedBalancedDrop: 0.04,
+    minConfirmedSkillDrop: 0.06,
+    confidenceZ: 1.96,
+    historySize: 32,
   },
   continual: {
     // Fraction of newly created training episodes assigned to each curriculum skill.

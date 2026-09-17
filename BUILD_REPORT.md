@@ -1,28 +1,35 @@
-# MicroMind v0.1.4.0.4 — Build Report
+# MicroMind v0.1.4.1.1 — Build Report
 
-**Version:** `0.1.4.0.4`  
-**Build marker:** `DECHUD-01404`  
-**Parent baseline:** v0.1.4.0.3 `RUNTIME-01403`
+**Version:** `0.1.4.1.1`  
+**Build marker:** `ROTAUD-01411`  
+**Parent baseline:** v0.1.4.1 `VALCONF-0141`
 
 ## Objective
 
-Fix the iPhone-visible Decision card freeze introduced by the off-screen visualization performance optimization, without waking hidden canvases or changing learning behavior.
+Measure the observed rear-target spinning failure before changing learning, sensors, rewards, memory, or physics.
 
-## Root cause
+## Evidence from the accepted code
 
-`updateDecision()` was called from the LIVE canvas render branch. v0.1.4.0.1 correctly stopped World/Cognitive Flow rendering while those canvases were off-screen, but that also stopped the Decision card from receiving fresh action probabilities, value, energy and reward-component text. Training itself continued normally.
+- `World.observe()` always provides nearest-food relative X, relative Y, and distance. There is no food field-of-view or wall occlusion in the policy observation.
+- The three limited rays are danger sensors.
+- `BRAKE` multiplies linear `vx/vy` by `0.72`, but it does not apply a special angular brake. Angular velocity receives the same `angularDrag` used after every action.
+
+Therefore the immediate question is whether the learned policy has a rear-bearing orientation / angular-control failure, not whether hidden-state memory loses an unseen food target.
 
 ## Implementation
 
-1. `updateDecision()` now also runs from the normal lightweight `updateUI()` path.
-2. LEARN UI cadence remains 5 Hz, so the Decision card stays responsive without restoring expensive 12 Hz off-screen canvas work.
-3. Existing on-screen LIVE rendering is unchanged; the canvas render path may still refresh Decision opportunistically while visible.
-4. No hidden canvas is awakened by the Decision refresh.
-5. v0.1.4.0.3 rolling 5s/30s train-rate and foreground/visual-state diagnostics remain intact.
+1. Added `src/evaluation/orientationAudit.js` as a read-only diagnostic module.
+2. Added fixed target bearings at ±179°, ±135°, ±90°, ±45° and 0°.
+3. Added 8 seeded stochastic-policy trials per bearing, 180 steps maximum per trial.
+4. Each trial starts from rest with zero recurrent state in an empty arena while preserving the real observation and angular physics paths.
+5. Captured facing success, reach success, spin incidence, steps-to-face, cumulative angular travel, BRAKE-while-turning usage, turn-action usage, and initial policy preference.
+6. Added a Research-panel control that pauses training, audits the exact Learner, then audits Balanced Champion on the same protocol when available.
+7. Added runtime serialize-before/after guards to fail safely if an audit ever mutates policy weights.
+8. Audit results are runtime-only; save schema remains **10**.
 
-## Safety / parity
+## Learning safety
 
-The learning/simulation files are intentionally unchanged from v0.1.4.0.3:
+The following parent files are intentionally unchanged byte-for-byte:
 
 - `src/ai/model.js`
 - `src/ai/ppo.js`
@@ -31,22 +38,24 @@ The learning/simulation files are intentionally unchanged from v0.1.4.0.3:
 - `src/ai/curiosity.js`
 - `src/sim/world.js`
 - `src/sim/curriculum.js`
-- `src/evaluation/evaluator.js`
 - `src/storage/checkpoints.js`
 - `src/utils/prng.js`
+- `src/app/runtimeDiagnostics.js`
+- all visualization renderer modules
 
-All visualization renderer modules and `styles.css` are also unchanged. Save schema remains **9**.
+Only release identity, UI/docs/tests, styling, and the new read-only evaluation module were added/changed.
 
 ## Verification
 
-Verification is completed before packaging and recorded below in the final report update.
+Final verification results are appended after packaging.
 
 ## Final verification results
 
-- Full Node test suite: **87/87 passed**.
+- Full Node test suite: **96/96 passed**.
 - Static `dist/` rebuild completed successfully.
 - JavaScript syntax check passed for every source/script/test module.
-- Protected learning/simulation files, all visualization renderer modules, `styles.css`, and runtime throughput diagnostics are **byte-for-byte identical** to v0.1.4.0.3; the configuration body is identical after the release identity lines.
-- Deterministic parent/candidate continuation parity: same seed and **3,456 training steps** produced exactly equal policy weights, PPO optimizer state, curiosity predictor, curriculum, rehearsal history, action RNG, environment cursor, global steps and Learner experience.
-- Development performance harness: **42.3k wall-clock training steps/sec**; last inner simulation phase **156.2k raw simulation steps/sec**; PPO ~**3.6 ms** in the container environment. Browser/iPhone results remain device-dependent.
-- New regression contract test verifies the Decision HUD refresh is present in the lightweight UI path while the off-screen canvas sleeping condition remains intact.
+- Protected learning/simulation/storage/runtime files and all visualization renderer modules are byte-for-byte identical to parent v0.1.4.1.
+- Deterministic parent/candidate continuation parity: same seed, 8 environments and **3,456 training steps** with ordinary validation disabled produced exactly identical policy, optimizer, curiosity, curriculum, environment, recurrent hidden-state, action-RNG, rehearsal and episode state.
+- Diagnostic contract tests verify that rear food remains encoded in the existing policy observation and that BRAKE applies no special angular braking beyond the common angular drag.
+- Orientation-audit tests verify fixed-seed determinism, bounded metrics and exact session/model immutability before vs. after audit execution.
+- Save schema remains **10**; existing schema-9 → schema-10 migration and schema-10 roundtrip tests continue to pass.

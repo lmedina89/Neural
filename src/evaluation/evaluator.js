@@ -82,6 +82,57 @@ export function evaluateFullRetentionSuite(model, options = {}) {
   return evaluateCurriculumSuite(model, CURRICULUM.length - 1, options);
 }
 
+// Paired confidence audit used only after an ordinary validation detects a
+// suspicious drop. Current and reference checkpoints see the exact same fixed
+// worlds and action-randomness streams; the distribution of per-episode score
+// differences is then summarized directly rather than comparing two unrelated
+// confidence intervals. This is read-only and never updates either model.
+export function evaluatePairedRetentionDelta(currentModel, referenceModel, {
+  stageIndexes = CURRICULUM.map((_, i) => i),
+  episodesPerStage = CONFIG.validationConfidence.episodesPerStage,
+  seedBase = CONFIG.validationConfidence.seedBase,
+  deterministic = false,
+} = {}) {
+  const indexes = [...new Set((stageIndexes || []).map(Number).filter(i => Number.isInteger(i) && i >= 0 && i < CURRICULUM.length))].sort((a, b) => a - b);
+  const stageResults = [];
+  const allDiffs = [];
+  for (const stageIndex of indexes) {
+    const stage = CURRICULUM[stageIndex];
+    const stageSeedBase = `${seedBase}:stage:${stageIndex}`;
+    const current = evaluateModel(currentModel, stage, { episodes: episodesPerStage, seedBase: stageSeedBase, deterministic });
+    const reference = evaluateModel(referenceModel, stage, { episodes: episodesPerStage, seedBase: stageSeedBase, deterministic });
+    const currentScores = current.rows.map(row => episodeSkillScore(row, stage));
+    const referenceScores = reference.rows.map(row => episodeSkillScore(row, stage));
+    const diffs = currentScores.map((x, i) => x - referenceScores[i]);
+    const diffStats = summarizeDifferenceSamples(diffs, CONFIG.validationConfidence.confidenceZ);
+    const currentStats = summarizeSamples(currentScores);
+    const referenceStats = summarizeSamples(referenceScores);
+    stageResults.push({
+      stage: stageIndex,
+      name: stage.name,
+      episodes: episodesPerStage,
+      currentScore: currentStats.mean,
+      referenceScore: referenceStats.mean,
+      delta: diffStats.mean,
+      ciLow: diffStats.ciLow,
+      ciHigh: diffStats.ciHigh,
+      stdErr: diffStats.stdErr,
+    });
+    allDiffs.push(...diffs);
+  }
+  const balanced = summarizeDifferenceSamples(allDiffs, CONFIG.validationConfidence.confidenceZ);
+  return {
+    protocol: `${seedBase}|paired|${indexes.join(',')}|${episodesPerStage}|${deterministic ? 'det' : 'seeded-stochastic'}|validation-confidence-v1`,
+    episodesPerStage,
+    stageIndexes: indexes,
+    balancedDelta: balanced.mean,
+    balancedCiLow: balanced.ciLow,
+    balancedCiHigh: balanced.ciHigh,
+    balancedStdErr: balanced.stdErr,
+    stageResults,
+  };
+}
+
 export function evaluateHeldoutGeneralizationSuite(model, {
   episodesPerStage = CONFIG.generalization.episodesPerStage,
   seedBase = CONFIG.generalization.seedBase,
@@ -183,6 +234,17 @@ function summarizeSamples(values) {
   const stdErr = Math.sqrt(Math.max(0, variance) / xs.length);
   const delta = CONFIG.validation.confidenceZ * stdErr;
   return { mean, stdErr, ciLow: clamp01(mean - delta), ciHigh: clamp01(mean + delta) };
+}
+
+function summarizeDifferenceSamples(values, z = CONFIG.validationConfidence.confidenceZ) {
+  const xs = values.map(Number).filter(Number.isFinite);
+  if (!xs.length) return { mean: 0, stdErr: 0, ciLow: 0, ciHigh: 0 };
+  const mean = xs.reduce((a, b) => a + b, 0) / xs.length;
+  if (xs.length === 1) return { mean, stdErr: 0, ciLow: mean, ciHigh: mean };
+  const variance = xs.reduce((sum, x) => sum + (x - mean) ** 2, 0) / (xs.length - 1);
+  const stdErr = Math.sqrt(Math.max(0, variance) / xs.length);
+  const delta = Math.max(0, Number(z) || 0) * stdErr;
+  return { mean, stdErr, ciLow: mean - delta, ciHigh: mean + delta };
 }
 
 function summarizeRows(rows) {

@@ -110,3 +110,17 @@
   .memoryPanel .panelHead,.historyPanel .panelHead,.predictWorldPanel .panelHead{align-items:flex-start;flex-direction:column}
   .memoryPanel .panelHead span,.historyPanel .panelHead span,.predictWorldPanel .panelHead span{text-align:left}
 }
+.orientationControls{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:10px 12px;border-bottom:1px solid rgba(113,173,195,.1)}
+.orientationControls span{font:10px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace;color:#7898a5}
+.orientationSummaryGrid{grid-template-columns:repeat(4,minmax(0,1fr))}
+.orientationResults{padding:10px 12px;font:11px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:#a9c6d1;overflow-x:auto}
+.orientationAuditIntro,.orientationAuditNote,.orientationBandLine{white-space:normal}
+.orientationAuditIntro{padding-bottom:10px;color:#90adba}
+.orientationAuditNote{padding-top:10px;color:#7898a5;border-top:1px solid rgba(113,173,195,.1)}
+.orientationResultBlock{margin:0 0 14px;border:1px solid rgba(113,173,195,.14);border-radius:10px;overflow:hidden}
+.orientationResultHead{display:flex;justify-content:space-between;gap:10px;padding:8px 9px;background:rgba(13,33,45,.5)}
+.orientationResultHead b{color:#d9edf4}.orientationResultHead span{color:#7898a5}
+.orientationBandLine{padding:8px 9px;border-top:1px solid rgba(113,173,195,.1);border-bottom:1px solid rgba(113,173,195,.1);color:#9fc2cf}
+.orientationTableWrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.orientationTable{min-width:720px}
+@media(max-width:820px){.orientationSummaryGrid{grid-template-columns:repeat(2,minmax(0,1fr))}}

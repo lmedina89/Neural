@@ -2,6 +2,7 @@ import { ACTIONS, BUILD_MARKER, CONFIG, VERSION } from '../config.js';
 import { TrainingSession } from '../ai/session.js';
 import { RecurrentActorCritic } from '../ai/model.js';
 import { evaluateFullRetentionSuite, evaluateHeldoutGeneralizationSuite, generalizationDiagnostic } from '../evaluation/evaluator.js';
+import { ORIENTATION_AUDIT, runOrientationAudit } from '../evaluation/orientationAudit.js';
 import { CURRICULUM } from '../sim/curriculum.js';
 import { World } from '../sim/world.js';
 import { domainSeed, PRNG } from '../utils/prng.js';
@@ -45,6 +46,10 @@ const el = {
   stabilityExplained: $('stabilityExplainedVal'), stabilityKl: $('stabilityKlVal'), stabilityClip: $('stabilityClipVal'), stabilityGrad: $('stabilityGradVal'), stabilityGradClip: $('stabilityGradClipVal'),
   stabilityParamDelta: $('stabilityParamDeltaVal'), stabilityParamMax: $('stabilityParamMaxVal'), stabilityAdvantage: $('stabilityAdvantageVal'), stabilityRejected: $('stabilityRejectedVal'),
   stabilityValidation: $('stabilityValidationText'), stabilityEvents: $('stabilityEventsText'),
+  confidenceCompactSummary: $('confidenceCompactSummary'), confidenceVerdict: $('confidenceVerdictVal'), confidenceReference: $('confidenceReferenceVal'),
+  confidenceSample: $('confidenceSampleVal'), confidenceBalanced: $('confidenceBalancedVal'), confidenceEvidence: $('confidenceEvidenceText'), confidenceHistory: $('confidenceHistoryText'),
+  orientationCompactSummary: $('orientationCompactSummary'), orientationRun: $('orientationRunBtn'), orientationSource: $('orientationSourceVal'),
+  orientationProtocol: $('orientationProtocolVal'), orientationRear: $('orientationRearVal'), orientationSpin: $('orientationSpinVal'), orientationResults: $('orientationResultsText'),
   observatoryNav: $('observatoryNav'), observatoryViewNote: $('observatoryViewNote'),
   predictWorld: $('predictWorldCanvas'), predictWorldMeta: $('predictWorldMeta'),
   memoryCanvas: $('memoryCanvas'), memoryMeta: $('memoryMeta'), memoryInspect: $('memoryInspect'),
@@ -57,6 +62,7 @@ const archiveLabels = { balanced: 'CHAMPION BALANCED', overall: 'CHAMPION OVERAL
 let mode = 'LEARN', paused = false, trainBusy = false, observeAccum = 0, lastFrame = performance.now(), viewSeedIndex = 0;
 let lastVisualRender = 0, lastCuriosityRender = 0, lastMemoryRender = 0, lastHistoryRender = 0, lastMemoryCaptureCheck = 0, lastUiPaint = 0, lastUiDurationMs = 0, lastStorageDurationMs = 0, browserFps = 60, rafFrames = 0, rafWindowStart = performance.now(), adaptiveDelay = 8, controlSignature = '';
 let activeObservatoryView = 'live';
+let lastOrientationAudit = null;
 const trainRate = new RollingStepRate({ windowsMs: [5000, 30000], sampleIntervalMs: 120 });
 let memoryPoints = [], memoryLastSampleAt = 0, memoryLastStep = -1, memoryLastSourceKey = '', memoryLineageId = null, memoryLastEpisode = -1;
 const MEMORY_MAX_POINTS = 320;
@@ -387,7 +393,10 @@ async function trainTick() {
       const alerts = v.forgetting?.length ? ` • observed: ${v.forgetting.map(x => `${x.name}${x.confirmed ? ' confirmed' : ''}`).join(', ')}` : '';
       const interp = String(v.interpretation || 'healthy').replaceAll('-', ' ');
       const pendingBalanced = v.promotionPending?.find(x => x.category === 'balanced');
+      const confidence = v.confidenceAudit;
       if (v.improved) setStatus(`New Champion Balanced promoted @ ${session.bestBrain.savedAtSteps.toLocaleString()} after repeat-confirmed validation. Learner continues independently; pin it manually if you want this Champion in the permanent Hall.`);
+      else if (confidence?.label === 'confirmed-regression') setStatus(`Validation confidence: CONFIRMED REGRESSION after paired fixed-seed replay. Learner ${(v.validation.score * 100).toFixed(1)}% • Champion ${(v.bestScore * 100).toFixed(1)}%. Observational only; no rollback or learning change was applied.`);
+      else if (confidence?.label === 'likely-noise') setStatus(`Validation confidence: LIKELY NOISE. A raw drop triggered confirmation but did not survive the larger paired fixed-seed replay. Learner continues unchanged.`);
       else if (pendingBalanced) setStatus(`Learner is challenging Champion Balanced: confirmation ${pendingBalanced.streak}/${pendingBalanced.required}. No weights changed by validation.`);
       else if (v.balancedEvidence || v.forgetting?.length) setStatus(`Validation observed ${interp}: learner ${(v.validation.score * 100).toFixed(1)}% • champion ${(v.bestScore * 100).toFixed(1)}%. Learner keeps learning; no behavioral rollback.${alerts}`);
       else setStatus(`All-skills validation complete: learner ${(v.validation.score * 100).toFixed(1)}% • champion ${(v.bestScore * 100).toFixed(1)}% • retention ${interp}.`);
@@ -620,7 +629,7 @@ function updateUI() {
   el.paramCount.textContent = `policy ${session.model.paramCount().toLocaleString()} + curiosity ${session.curiosity.paramCount().toLocaleString()} params`;
   el.curriculum.textContent = session.curriculum.current().name;
   const lv = session.validationHistory.at(-1);
-  el.latestValidation.textContent = lv ? `${(lv.validation.score * 100).toFixed(1)}% @ ${lv.steps.toLocaleString()}${lv.balancedConfirmed ? ' CONFIRMED' : lv.balancedEvidence ? ' WATCH' : ''}` : '—';
+  el.latestValidation.textContent = lv ? `${(lv.validation.score * 100).toFixed(1)}% @ ${lv.steps.toLocaleString()}${lv.confidenceAudit?.label === 'confirmed-regression' ? ' CONFIRMED' : lv.confidenceAudit?.label === 'likely-noise' ? ' NOISE?' : lv.balancedEvidence ? ' WATCH' : ''}` : '—';
   const balancedBrain = session.getArchiveBrain('balanced');
   if (balancedBrain?.validation?.categoryScores) el.bestValidation.textContent = `${(balancedBrain.validation.categoryScores.balanced * 100).toFixed(1)}% @ ${balancedBrain.savedAtSteps.toLocaleString()}`;
   else if (balancedBrain?.validation) el.bestValidation.textContent = `legacy ${Number(balancedBrain.validation.score ?? 0).toFixed(2)} @ ${balancedBrain.savedAtSteps.toLocaleString()}`;
@@ -706,6 +715,31 @@ function updateUI() {
   el.stabilityValidation.textContent = formatStabilityValidation(stability.lastValidationDeltas);
   el.stabilityEvents.textContent = formatStabilityEvents(session.stabilityEvents);
 
+  const confidence = session.validationConfidenceHistory?.at(-1) || session.retentionStatus?.confidenceAudit || null;
+  el.confidenceVerdict.textContent = confidence ? confidenceLabel(confidence.label) : '—';
+  el.confidenceReference.textContent = Number.isFinite(Number(confidence?.referenceSteps)) ? Number(confidence.referenceSteps).toLocaleString() : 'awaiting baseline';
+  el.confidenceSample.textContent = confidence?.paired ? `${confidence.episodesPerStage}/skill paired` : confidence?.label === 'baseline-established' ? 'baseline only' : 'not triggered';
+  el.confidenceBalanced.textContent = formatConfidenceBalanced(confidence?.balanced, confidence?.rawBalancedDelta);
+  el.confidenceCompactSummary.textContent = confidence ? `${confidenceLabel(confidence.label)} • paired fixed seeds • ${confidence.paired ? `${confidence.episodesPerStage}/skill` : 'cheap routine check'}` : 'waiting for validation baseline';
+  el.confidenceEvidence.textContent = formatConfidenceEvidence(confidence);
+  el.confidenceHistory.textContent = formatConfidenceHistory(session.validationConfidenceHistory);
+
+  if (lastOrientationAudit) {
+    const learner = lastOrientationAudit.learner?.result;
+    const champion = lastOrientationAudit.champion?.result;
+    const rear = learner?.bands?.rear;
+    el.orientationSource.textContent = champion ? `Learner + Champion @ ${Number(lastOrientationAudit.champion.steps || 0).toLocaleString()}` : 'Learner only';
+    el.orientationProtocol.textContent = learner?.protocol || '—';
+    el.orientationRear.textContent = rear ? `${pct(rear.facingRate)} face • ${pct(rear.reachRate)} reach` : '—';
+    el.orientationSpin.textContent = rear ? `${pct(rear.spinRate)} rear spin` : '—';
+    el.orientationCompactSummary.textContent = rear ? `Learner rear face ${pct(rear.facingRate)} • spin ${pct(rear.spinRate)}${champion ? ` • Champion spin ${pct(champion.bands.rear.spinRate)}` : ''}` : 'rear-target turn control • observational';
+  } else {
+    el.orientationSource.textContent = '—';
+    el.orientationProtocol.textContent = '—';
+    el.orientationRear.textContent = '—';
+    el.orientationSpin.textContent = '—';
+    el.orientationCompactSummary.textContent = 'rear-target turn control • observational';
+  }
 
   const hall = session.hallOfFameSummary();
   const branches = session.frozenLearnerSummary();
@@ -738,12 +772,13 @@ function renderSkillRetention() {
     const cell = document.createElement('div');
     const alert = alerts.get(stage.stage);
     const best = session.skillBestRecords?.[stage.stage];
+    const likelyNoise = alert?.confidenceLabel === 'likely-noise';
     const cls = alert ? (alert.confirmed ? ' forgetting confirmed' : ' forgetting watch') : '';
     cell.className = `skillCell${cls}`;
     const nowRange = `${pct(stage.skillCiLow)}–${pct(stage.skillCiHigh)}`;
     const bestScore = best?.score ?? stage.skillScore;
     const bestRange = best ? `${pct(best.ciLow)}–${pct(best.ciHigh)}` : nowRange;
-    const tag = alert ? ` • ${alert.confirmed ? 'CONFIRMED' : 'WATCH'} ${alert.severity.toUpperCase()} x${alert.streak}` : '';
+    const tag = alert ? ` • ${alert.confirmed ? 'CONFIRMED' : likelyNoise ? 'LIKELY NOISE' : 'MEASURED DROP'} ${alert.severity.toUpperCase()} x${alert.streak}` : '';
     cell.innerHTML = `<b>${stage.name}</b><span>now ${pct(stage.skillScore)} [${nowRange}]</span><span>best ${pct(bestScore)} [${bestRange}]${tag}</span>`;
     el.skillRetention.append(cell);
   }
@@ -803,8 +838,46 @@ function formatStabilityEvents(events) {
     const kl = Number.isFinite(ppo.maxEpochKL) ? ` • KL ${ppo.maxEpochKL.toFixed(4)}` : '';
     const clip = Number.isFinite(ppo.clipFraction) ? ` • clip ${(ppo.clipFraction * 100).toFixed(0)}%` : '';
     const delta = Number.isFinite(ppo.parameterRelativeDelta) ? ` • Δw ${ppo.parameterRelativeDelta.toExponential(1)}` : '';
-    return `${Number(event.atSteps || 0).toLocaleString()} • ${String(event.trigger || 'regression').replaceAll('-', ' ')} • balanced ${signedPoints(event.balancedDelta)}${skill}${kl}${clip}${delta}`;
+    const confidence = event.validationConfidence?.label ? ` • ${confidenceLabel(event.validationConfidence.label)}` : '';
+    return `${Number(event.atSteps || 0).toLocaleString()} • ${String(event.trigger || 'regression').replaceAll('-', ' ')} • balanced ${signedPoints(event.balancedDelta)}${skill}${kl}${clip}${delta}${confidence}`;
   }).join('\n');
+}
+function confidenceLabel(label) {
+  const value = String(label || 'unavailable');
+  if (value === 'confirmed-regression') return 'CONFIRMED REGRESSION';
+  if (value === 'likely-noise') return 'LIKELY NOISE';
+  if (value === 'measured-drop') return 'MEASURED DROP';
+  if (value === 'baseline-established') return 'BASELINE ESTABLISHED';
+  if (value === 'stable') return 'STABLE';
+  return value.replaceAll('-', ' ').toUpperCase();
+}
+function formatConfidenceBalanced(balanced, rawDelta) {
+  if (balanced?.classification) {
+    const paired = Number.isFinite(Number(balanced.pairedDelta)) ? signedPoints(balanced.pairedDelta) : '—';
+    const range = Number.isFinite(Number(balanced.ciLow)) && Number.isFinite(Number(balanced.ciHigh))
+      ? `[${signedPoints(balanced.ciLow)} to ${signedPoints(balanced.ciHigh)}]` : '';
+    return `${confidenceLabel(balanced.classification)} • ${paired} ${range}`.trim();
+  }
+  return Number.isFinite(Number(rawDelta)) ? `raw ${signedPoints(rawDelta)}` : '—';
+}
+function formatConfidenceEvidence(confidence) {
+  if (!confidence) return 'Waiting for a same-lineage validation reference.';
+  const lines = [];
+  if (confidence.note) lines.push(confidence.note);
+  if (confidence.balanced) {
+    const x = confidence.balanced;
+    lines.push(`Balanced • raw ${signedPoints(x.rawDelta)}${Number.isFinite(Number(x.pairedDelta)) ? ` • paired ${signedPoints(x.pairedDelta)} [${signedPoints(x.ciLow)} to ${signedPoints(x.ciHigh)}]` : ''} • ${confidenceLabel(x.classification)}`);
+  }
+  for (const x of confidence.skills || []) {
+    lines.push(`${x.name} • raw ${signedPoints(x.rawDelta)}${Number.isFinite(Number(x.pairedDelta)) ? ` • paired ${signedPoints(x.pairedDelta)} [${signedPoints(x.ciLow)} to ${signedPoints(x.ciHigh)}]` : ''} • ${confidenceLabel(x.classification)}`);
+  }
+  if (!confidence.measured && confidence.label === 'stable') lines.push('No raw drop crossed the confirmation trigger; larger replay was skipped to protect phone throughput.');
+  return lines.join('\n');
+}
+function formatConfidenceHistory(history) {
+  const rows = Array.isArray(history) ? history.filter(x => x?.label && x.label !== 'stable').slice(-5).reverse() : [];
+  if (!rows.length) return 'No measured-drop confidence events yet.';
+  return rows.map(x => `${Number(x.atSteps || 0).toLocaleString()} • ${confidenceLabel(x.label)}${Number.isFinite(Number(x.referenceSteps)) ? ` • vs ${Number(x.referenceSteps).toLocaleString()}` : ''}`).join('\n');
 }
 function retentionLabel(status) {
   const label = String(status?.interpretation || 'unvalidated').replaceAll('-', ' ').toUpperCase();
@@ -887,6 +960,65 @@ function suiteText(name, r) {
   const skillLines = r.stageResults.map(x => `  ${x.name}: ${pct(x.skillScore)} [${pct(x.skillCiLow)}–${pct(x.skillCiHigh)}]`).join('\n');
   return `${name}\nprotocol: ${r.protocol}\nepisodes: ${r.episodes} (${r.episodesPerStage}/skill)\ngeneralization score: ${pct(r.balancedScore)} [${pct(r.balancedCiLow)}–${pct(r.balancedCiHigh)}]\nmean return: ${r.meanReturn.toFixed(3)}\nmean food: ${r.meanFood.toFixed(3)}\nsurvival: ${(r.survivalRate * 100).toFixed(1)}%\nmean energy: ${r.meanEnergy.toFixed(3)}\nmean steps: ${r.meanSteps.toFixed(1)}\nskills:\n${skillLines}`;
 }
+function orientationResultHtml(label, audit, meta = '') {
+  const rows = audit.bearings.map(row => {
+    const face = pct(row.facingRate);
+    const spin = pct(row.spinRate);
+    const reach = pct(row.reachRate);
+    const faceSteps = Number.isFinite(row.meanFacingSteps) ? row.meanFacingSteps.toFixed(1) : '—';
+    const rotations = row.meanRotations.toFixed(2);
+    const brakeTurn = pct(row.brakeWhileTurningRate);
+    const first = `${row.initialDominantAction} ${(row.initialDominantProbability * 100).toFixed(0)}%`;
+    return `<tr><td>${row.bearingDeg > 0 ? '+' : ''}${row.bearingDeg}°</td><td>${face}</td><td>${spin}</td><td>${reach}</td><td>${faceSteps}</td><td>${rotations}</td><td>${brakeTurn}</td><td>${first}</td></tr>`;
+  }).join('');
+  const rear = audit.bands.rear;
+  return `<div class="orientationResultBlock"><div class="orientationResultHead"><b>${label}</b><span>${meta}</span></div><div class="orientationBandLine">rear ≥135° • face ${pct(rear.facingRate)} • spin ${pct(rear.spinRate)} • reach ${pct(rear.reachRate)} • mean turn ${rear.meanRotations.toFixed(2)} rotations • BRAKE while already turning ${pct(rear.brakeWhileTurningRate)}</div><div class="orientationTableWrap"><table class="resultsTable orientationTable"><thead><tr><th>bearing</th><th>face</th><th>spin</th><th>reach</th><th>steps→face</th><th>rotations</th><th>brake@ω</th><th>initial argmax</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+}
+
+async function runRearTargetAudit() {
+  paused = true;
+  el.pause.textContent = 'Resume';
+  el.orientationRun.disabled = true;
+  setStatus(`Running read-only rear-target rotation audit: ${ORIENTATION_AUDIT.bearingsDeg.length} bearings × ${ORIENTATION_AUDIT.trialsPerBearing} seeded trials. Training is paused so the tested weights cannot move.`);
+  await yieldUI();
+  try {
+    const learnerBefore = JSON.stringify(session.model.serialize());
+    const learnerResult = runOrientationAudit(session.model);
+    const learnerAfter = JSON.stringify(session.model.serialize());
+    if (learnerBefore !== learnerAfter) throw new Error('audit safety check failed: Learner weights changed');
+    await yieldUI();
+
+    const result = {
+      ranAtSteps: session.totalSteps,
+      lineageId: session.learnerLineage?.id || 'learner',
+      learner: { steps: session.totalSteps, result: learnerResult },
+      champion: null,
+    };
+    const champion = session.getArchiveBrain('balanced');
+    if (champion?.model) {
+      const model = new RecurrentActorCritic(1);
+      model.restore(champion.model);
+      const before = JSON.stringify(model.serialize());
+      const championResult = runOrientationAudit(model);
+      if (before !== JSON.stringify(model.serialize())) throw new Error('audit safety check failed: Champion weights changed');
+      result.champion = { steps: champion.savedAtSteps, result: championResult };
+    }
+    lastOrientationAudit = result;
+    let html = `<div class="orientationAuditIntro">Controlled empty-arena diagnostic. Food direction remains present in the existing policy observation even when the target is behind the agent; this audit changes no sensors, rewards, physics, recurrent state, PPO, curriculum, checkpoints, or Champion state. Each trial starts from rest with zero recurrent state and uses the real stochastic policy plus real angular dynamics.</div>`;
+    html += orientationResultHtml(`LEARNER • ${result.lineageId}`, learnerResult, `@ ${Number(session.totalSteps).toLocaleString()} steps`);
+    if (result.champion) html += orientationResultHtml('CHAMPION BALANCED', result.champion.result, `@ ${Number(result.champion.steps).toLocaleString()} steps`);
+    html += `<div class="orientationAuditNote">Interpretation aid: “spin” means cumulative angular travel reached the audit threshold (${ORIENTATION_AUDIT.spinRotationThreshold.toFixed(2)} rotations), not that the code declared the policy broken. “brake@ω” measures how often BRAKE was selected while angular speed was already substantial; current world physics applies no special angular braking on BRAKE beyond the same angular drag every action receives.</div>`;
+    el.orientationResults.innerHTML = html;
+    updateUI();
+    const rear = learnerResult.bands.rear;
+    setStatus(`Rear-target audit complete. Learner rear-facing success ${pct(rear.facingRate)}, spin incidence ${pct(rear.spinRate)}, reach ${pct(rear.reachRate)}. Training remains paused; no learning or save state changed.`);
+  } catch (e) {
+    setStatus(`Rear-target audit failed safely: ${e.message}`);
+  } finally {
+    el.orientationRun.disabled = false;
+  }
+}
+
 async function runUnseen() {
   paused = true;
   el.pause.textContent = 'Resume';
@@ -1140,6 +1272,7 @@ el.switchBranch.addEventListener('click', () => {
     setStatus(`Active Learner switched to ${event.lineageId}. Previous Learner ${event.preservedLineageId} is frozen. Immediate validation is scheduled before long training continues.`);
   } catch (e) { setStatus(`Branch switch failed: ${e.message}`); }
 });
+el.orientationRun?.addEventListener('click', runRearTargetAudit);
 el.test.addEventListener('click', runUnseen);
 el.compare.addEventListener('click', compareBrains);
 el.brain.addEventListener('pointerdown', e => { const text = neuralRenderer.inspectAt(e.clientX, e.clientY); if (text) el.inspect.textContent = text; });

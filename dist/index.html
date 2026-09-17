@@ -14,7 +14,7 @@
         <div class="eyebrow">MICROMIND • LEARNING LABORATORY</div>
         <h1>Watch a tiny brain actually learn.</h1>
       </div>
-      <div class="build" id="buildTag">v0.1.4.0.4 • DECHUD-01404</div>
+      <div class="build" id="buildTag">v0.1.4.1.1 • ROTAUD-01411</div>
     </header>
 
     <section class="controls" aria-label="Main controls">
@@ -212,7 +212,8 @@
         <div><b>Food</b><span>Recent average resources collected per episode.</span></div>
         <div><b>Entropy</b><span>Policy uncertainty/exploration. High means action probabilities are more spread out.</span></div>
         <div><b>Value</b><span>The critic's estimate of expected future return from the current state.</span></div>
-        <div><b>Validation</b><span>12 fixed seeds per skill plus confidence ranges. Retention warnings are observational; Champions require repeat-confirmed improvement before promotion.</span></div>
+        <div><b>Validation</b><span>12 fixed seeds per skill for routine checks. Suspicious drops trigger a larger paired fixed-seed confirmation pass against the exact previous same-lineage checkpoint before MicroMind uses the word CONFIRMED.</span></div>
+        <div><b>Rear-Target Audit</b><span>Read-only controlled turn test. It places food at fixed bearings around the agent and measures facing, spinning, reaching, angular travel, and BRAKE use without changing the Learner.</span></div>
       </div>
     </details>
 
@@ -236,6 +237,36 @@
         </div>
         <div class="stabilityValidation" id="stabilityValidationText">Waiting for two comparable validation checkpoints to calculate per-skill deltas.</div>
         <div class="stabilityEvents" id="stabilityEventsText">No large validation regression event captured yet.</div>
+      </div>
+    </details>
+
+    <details class="panel confidencePanel collapsiblePanel" data-observatory-view="research" hidden aria-label="Validation confidence and regression audit">
+      <summary class="panelSummary"><strong>VALIDATION CONFIDENCE</strong><span id="confidenceCompactSummary">paired fixed-seed confirmation • observational only</span></summary>
+      <div class="collapsibleBody">
+        <div class="stabilityNotice">Routine validation stays lightweight. Only suspicious drops trigger a larger paired replay on fixed validation seeds against the exact previous same-lineage checkpoint. This panel never changes weights, rewards, curriculum, or Champion state.</div>
+        <div class="stabilityGrid">
+          <div><span>verdict</span><b id="confidenceVerdictVal">—</b></div>
+          <div><span>reference checkpoint</span><b id="confidenceReferenceVal">—</b></div>
+          <div><span>confirmation sample</span><b id="confidenceSampleVal">—</b></div>
+          <div><span>balanced evidence</span><b id="confidenceBalancedVal">—</b></div>
+        </div>
+        <div class="stabilityValidation" id="confidenceEvidenceText">Waiting for a same-lineage validation reference.</div>
+        <div class="stabilityEvents" id="confidenceHistoryText">No confidence-audit events yet.</div>
+      </div>
+    </details>
+
+    <details class="panel orientationPanel collapsiblePanel" data-observatory-view="research" hidden aria-label="Rear-target and rotation audit">
+      <summary class="panelSummary"><strong>REAR-TARGET / ROTATION AUDIT</strong><span id="orientationCompactSummary">rear-target turn control • observational</span></summary>
+      <div class="collapsibleBody">
+        <div class="stabilityNotice">Read-only controlled diagnostic. The current policy already receives nearest-food relative X/Y even when food is behind it; this test isolates how that information becomes turning behavior. Training pauses while the exact Learner weights are tested. If a Balanced Champion exists, the same fixed protocol tests it too.</div>
+        <div class="orientationControls"><button id="orientationRunBtn">Run Rear-Target Audit</button><span>9 bearings • 8 seeded trials each • actual stochastic actions + angular physics</span></div>
+        <div class="stabilityGrid orientationSummaryGrid">
+          <div><span>source</span><b id="orientationSourceVal">—</b></div>
+          <div><span>protocol</span><b id="orientationProtocolVal">—</b></div>
+          <div><span>learner rear</span><b id="orientationRearVal">—</b></div>
+          <div><span>spin incidence</span><b id="orientationSpinVal">—</b></div>
+        </div>
+        <div class="orientationResults" id="orientationResultsText">No rear-target audit run yet. Run this against the loaded 23M-step Learner before changing sensors, rewards, PPO, recurrent training, or turn physics.</div>
       </div>
     </details>
 
@@ -298,7 +329,7 @@
       <div class="collapsibleBody"><div id="resultsText" class="resultsText">No evaluation run yet.</div></div>
     </details>
 
-    <footer>MicroMind v0.1.4.0.4 keeps the Decision HUD live at the lightweight UI cadence even when expensive LIVE canvases sleep off-screen. Runtime throughput diagnostics, visual fidelity, spawn clearance, learning math, curiosity, curriculum, save schema, three-ray perception, and protected Champion behavior remain unchanged.</footer>
+    <footer>MicroMind v0.1.4.1.1 adds a read-only rear-target and rotation audit on top of v0.1.4.1 validation confidence. Learning math, curiosity, curriculum, observations, world physics, save schema, and protected Champion behavior remain unchanged.</footer>
   </main>
   <script type="module" src="./src/app/main.js"></script>
 </body>
