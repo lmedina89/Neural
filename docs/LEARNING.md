@@ -11,3 +11,9 @@ The controlled audit therefore measures actual behavior rather than prescribing 
 A “successful detour” means that an initially blocked direct path became clear and the agent later reached food after measurable lateral excursion. It is not a policy label, target action, imitation signal, or reward.
 
 Save schema remains **10**. Diagnostic state is session-only and is never serialized into the learner or Champion.
+
+## v0.1.4.2 Detour Learning A/B
+
+Occlusion characterization showed that the accepted learner can orient and reach rear targets in open space, yet repeatedly enters rotation traps when a wall blocks the direct food path. v0.1.4.2 tests one narrow hypothesis: the signed step-to-step approach reward can punish temporary retreat that is required for a detour.
+
+The experiment preserves the current learner and creates matched CONTROL and DETOUR descendants. CONTROL keeps the legacy signed approach reward. DETOUR awards dense approach reward only for new closest-distance records; retreat is neutral and returning to a prior best distance cannot farm reward. All other reward terms, observations, sensors, PPO, curiosity, recurrence, physics and curriculum mix are held constant. Fixed branch checkpoints compare both retained skills and the seven-geometry occlusion audit. No winner is selected automatically.

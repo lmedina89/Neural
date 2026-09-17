@@ -17,9 +17,9 @@ import { projectHiddenState } from '../src/visualization/memoryRenderer.js';
 import { buildHistoryScene } from '../src/visualization/historyRenderer.js';
 import { RollingStepRate, formatRollingRate } from '../src/app/runtimeDiagnostics.js';
 
-test('release identity is v0.1.4.1.3 Occlusion Failure Characterization',()=>{assert.equal(VERSION,'0.1.4.1.3');assert.equal(BUILD_MARKER,'OCCCHAR-01413')});
+test('release identity is v0.1.4.2 Detour Learning A/B',()=>{assert.equal(VERSION,'0.1.4.2');assert.equal(BUILD_MARKER,'DETOURAB-0142')});
 test('PRNG is repeatable',()=>{const a=new PRNG(123),b=new PRNG(123);for(let i=0;i<100;i++)assert.equal(a.nextUint(),b.nextUint())});
-test('training, validation, comparison, curiosity-audit and final-holdout seed domains are separated',()=>{const domains=['train',CONFIG.validation.seedBase,CONFIG.validationConfidence.seedBase,CONFIG.generalization.compareSeedBase,CONFIG.curiosityAudit.seedBase,CONFIG.generalization.seedBase];const seeds=domains.map(x=>domainSeed(x,0));assert.equal(new Set(seeds).size,seeds.length)});
+test('training, validation, comparison, A/B-audit and final-holdout seed domains are separated',()=>{const domains=['train',CONFIG.validation.seedBase,CONFIG.validationConfidence.seedBase,CONFIG.generalization.compareSeedBase,CONFIG.curiosityAudit.seedBase,CONFIG.detourAudit.seedBase,CONFIG.generalization.seedBase];const seeds=domains.map(x=>domainSeed(x,0));assert.equal(new Set(seeds).size,seeds.length)});
 test('world generation is deterministic',()=>{const a=new World(77,CURRICULUM[2]),b=new World(77,CURRICULUM[2]);assert.deepEqual(a.food,b.food);assert.deepEqual(a.hazards,b.hazards);assert.deepEqual(a.walls,b.walls);assert.deepEqual(Array.from(a.observe()),Array.from(b.observe()))});
 test('legacy-valid seed geometry is unchanged by corrective spawn clearance',()=>{
   const w=new World(77,CURRICULUM[2]);
@@ -107,7 +107,7 @@ test('rear-target audit UI is explicit, observational and wired without save-sch
   assert.match(main,/runRearTargetAudit/);
   assert.match(main,/runOrientationAudit\(session\.model\)/);
   assert.match(main,/Training remains paused; no learning or save state changed/);
-  assert.match(sessionSrc,/schema: 10/);
+  assert.match(sessionSrc,/schema: 11/);
 });
 
 test('line-of-sight diagnostic distinguishes open, clearance-only and visually occluded paths without changing observations',()=>{
@@ -166,7 +166,7 @@ test('occlusion characterization UI is session-only and wired without save-schem
   for(const id of ['spinCompactSummary','spinRecorderStatusVal','spinEventCountVal','spinBlockedRateVal','spinLatestCauseVal','spinResultsText','spinOcclusionRunBtn','spinClearBtn','spinOcclusionResultsText'])assert.match(html,new RegExp(`id="${id}"`));
   assert.match(html,/OCCLUSION \/ ROTATION-TRAP TELEMETRY/);assert.match(html,/Run Occlusion Failure Audit/);
   assert.match(main,/liveSpinRecorder\.beginSample/);assert.match(main,/runOcclusionConflictAudit/);assert.match(main,/foodVisibilityDiagnostic\(viewWorld\)/);assert.match(main,/rotationTrapRate/);
-  assert.match(sessionSrc,/schema: 10/);assert.equal(SPIN_TELEMETRY.protocol,'live-occlusion-rotation-trap:v2');assert.equal(OCCLUSION_AUDIT.protocol,'occlusion-failure-characterization:v2');
+  assert.match(sessionSrc,/schema: 11/);assert.equal(SPIN_TELEMETRY.protocol,'live-occlusion-rotation-trap:v2');assert.equal(OCCLUSION_AUDIT.protocol,'occlusion-failure-characterization:v2');
 });
 
 test('GAE returns finite aligned arrays',()=>{const t=[{env:0,reward:1,value:.2,done:false},{env:0,reward:.5,value:.3,done:true}];const g=computeGAE(t,new Map([[0,0]]));assert.equal(g.advantages.length,2);assert.ok([...g.advantages,...g.returns].every(Number.isFinite))});
@@ -218,13 +218,13 @@ test('manual Champion fork creates a new lineage without rewinding experience',(
 test('PPO uses scheduled entropy, bounded adaptive LR and finite KL stats',()=>{const s=new TrainingSession({seed:19,envCount:2,autoCurriculum:false});s.totalSteps=4_000_000;const {metric}=s.trainRollout(8);assert.ok(metric.entropyCoef<CONFIG.ppo.entropyStart);assert.ok(metric.entropyCoef>=CONFIG.ppo.entropyEnd);assert.ok(metric.learningRate>=CONFIG.ppo.minLearningRate&&metric.learningRate<=CONFIG.ppo.maxLearningRate);assert.ok(Number.isFinite(metric.maxEpochKL));assert.ok(metric.epochsRun>=1&&metric.epochsRun<=CONFIG.ppo.epochs)});
 test('PPO hard-KL guard rejects an obviously destructive update and restores model',()=>{const model=new RecurrentActorCritic(55);const trainer=new PPOTrainer(model,56);const obs=new Float64Array(CONFIG.model.obsSize);obs[9]=1;const h=model.zeroHidden();const before=model.serialize();const transitions=[0,1,2,3].map((action,i)=>({obs,hPrev:h,action:action%CONFIG.model.actionSize,logProb:-20-i,value:0,reward:0,done:false}));const advantages=new Float64Array([1,-1,1,-1]);const returns=new Float64Array([1,-1,1,-1]);const stats=trainer.update(transitions,advantages,returns,{trainingStep:0});assert.equal(stats.updateRejected,true);assert.deepEqual(model.serialize(),before);assert.ok(trainer.learningRate<CONFIG.ppo.learningRate)});
 
-test('schema-10 checkpoint roundtrip preserves policy, curiosity, Champions, lineage, Hall, branches and rehearsal state',()=>{const a=new TrainingSession({seed:3,envCount:2,autoCurriculum:false});a.curriculum.stage=2;for(let i=0;i<24;i++)a.resetEnv(i%2);a.trainRollout(4);a.runValidation();a.pinChampion('balanced');const oldLineage=a.learnerLineage.id;a.forkFromChampion('balanced');const snap=a.snapshot();assert.equal(snap.schema,10);assert.ok(snap.hallOfFame.entries.length>=1);assert.ok(snap.frozenLearners.some(x=>x.id===oldLineage));const b=new TrainingSession({seed:4,envCount:2,autoCurriculum:false});b.restore(snap);assert.equal(b.totalSteps,a.totalSteps);assert.deepEqual(Array.from(b.model.params.bp),Array.from(a.model.params.bp));assert.equal(b.bestBrain.savedAtSteps,a.bestBrain.savedAtSteps);assert.deepEqual(b.skillBestRecords,a.skillBestRecords);assert.deepEqual(b.promotionStreaks,a.promotionStreaks);assert.deepEqual(b.learnerLineage,a.learnerLineage);assert.deepEqual(b.rehearsalEpisodeHistory,a.rehearsalEpisodeHistory);assert.equal(b.hallOfFame.length,a.hallOfFame.length);assert.equal(b.frozenLearners.length,a.frozenLearners.length);assert.equal(b.learnerExperienceSteps,a.learnerExperienceSteps);assert.deepEqual(b.curiosity.serialize(),a.curiosity.serialize())});
+test('schema-11 checkpoint roundtrip preserves policy, curiosity, Champions, lineage, Hall, branches and rehearsal state',()=>{const a=new TrainingSession({seed:3,envCount:2,autoCurriculum:false});a.curriculum.stage=2;for(let i=0;i<24;i++)a.resetEnv(i%2);a.trainRollout(4);a.runValidation();a.pinChampion('balanced');const oldLineage=a.learnerLineage.id;a.forkFromChampion('balanced');const snap=a.snapshot();assert.equal(snap.schema,11);assert.ok(snap.hallOfFame.entries.length>=1);assert.ok(snap.frozenLearners.some(x=>x.id===oldLineage));const b=new TrainingSession({seed:4,envCount:2,autoCurriculum:false});b.restore(snap);assert.equal(b.totalSteps,a.totalSteps);assert.deepEqual(Array.from(b.model.params.bp),Array.from(a.model.params.bp));assert.equal(b.bestBrain.savedAtSteps,a.bestBrain.savedAtSteps);assert.deepEqual(b.skillBestRecords,a.skillBestRecords);assert.deepEqual(b.promotionStreaks,a.promotionStreaks);assert.deepEqual(b.learnerLineage,a.learnerLineage);assert.deepEqual(b.rehearsalEpisodeHistory,a.rehearsalEpisodeHistory);assert.equal(b.hallOfFame.length,a.hallOfFame.length);assert.equal(b.frozenLearners.length,a.frozenLearners.length);assert.equal(b.learnerExperienceSteps,a.learnerExperienceSteps);assert.deepEqual(b.curiosity.serialize(),a.curiosity.serialize())});
 test('schema-3 v0.1.1 archive is preserved for inspection and scheduled for v3 recalibration',()=>{const a=new TrainingSession({seed:31,envCount:2,autoCurriculum:false});a.runValidation();const snap=a.snapshot();const legacy={...snap,schema:3};delete legacy.skillBestRecords;delete legacy.skillRegressionStreaks;delete legacy.balancedRegressionStreak;delete legacy.pendingArchiveMigration;delete legacy.archiveNeedsRebaseline;const b=new TrainingSession({seed:32,envCount:2,autoCurriculum:false});b.restore(legacy);assert.equal(b.archiveNeedsRebaseline,true);assert.ok(b.bestBrain?.model);assert.ok(b.pendingArchiveMigration.length>=1);assert.equal(b.nextValidationStep,b.totalSteps);assert.ok(b.legacyValidationHistory.length>=1);const v=b.runValidation();assert.equal(b.archiveNeedsRebaseline,false);assert.ok(v.migratedArchive.length>=1);assert.match(v.validation.protocol,/retention-v3-ci/)});
 test('schema-2 save migration preserves old protected best and schedules immediate rebaseline',()=>{const a=new TrainingSession({seed:23,envCount:2,autoCurriculum:false});a.trainRollout(4);a.runValidation();const snap=a.snapshot();const legacy={schema:2,seed:snap.seed,totalSteps:3_758_688,totalEpisodes:6000,envSeedCursor:snap.envSeedCursor,curriculum:snap.curriculum,model:snap.model,optimizer:snap.optimizer,metrics:snap.metrics,milestones:snap.milestones,bestBrain:snap.bestBrain,bestBrains:{legacy:snap.bestBrain},validationHistory:[],lastValidationStep:3_500_000,nextValidationStep:3_750_000,rollbackHistory:[]};const b=new TrainingSession({seed:99,envCount:2,autoCurriculum:false});b.restore(legacy);assert.equal(b.totalSteps,3_758_688);assert.ok(b.pendingLegacyBest?.model);assert.equal(b.bestBrain.savedAtSteps,snap.bestBrain.savedAtSteps);assert.equal(b.nextValidationStep,b.totalSteps);const v=b.runValidation();assert.equal(v.validation.maxStage,CURRICULUM.length-1);assert.equal(b.pendingLegacyBest,null);assert.ok(b.getArchiveBrain('balanced'))});
 test('schema-1 long-run migration snapshots exact loaded brain and does not backfill fake milestones',()=>{const a=new TrainingSession({seed:44,envCount:2,autoCurriculum:false});const snap=a.snapshot();const steps=2_122_848;const legacy={schema:1,seed:snap.seed,totalSteps:steps,totalEpisodes:3000,envSeedCursor:snap.envSeedCursor,curriculum:{stage:2,history:[]},model:snap.model,optimizer:snap.optimizer,metrics:[],milestones:snap.milestones};const b=new TrainingSession({seed:45,envCount:2,autoCurriculum:false});b.restore(legacy);assert.equal(b.nextMilestoneStep,2_250_000);assert.ok(b.milestones.has(steps));assert.equal(b.milestones.has(1_250_000),false);assert.equal(b.nextValidationStep,b.totalSteps)});
 
 test('reward is decomposed into finite named components',()=>{const w=new World(12345,CURRICULUM[1]);const r=w.step(1);const parts=r.info.rewardParts;for(const k of ['survival','energy','wall','food','hazard','approach','death'])assert.ok(Number.isFinite(parts[k]),k)});
-test('v0.1.4.0.4 UI preserves Hall, branching, performance, lineage, rehearsal and curiosity-audit diagnostics',async()=>{const html=await readFile(new URL('../index.html',import.meta.url),'utf8');for(const id of ['brainSource','hallBrainOptions','bestOption','overallOption','foragerOption','survivorOption','efficiencyOption','pinChampionBtn','restoreBestBtn','branchSelect','switchBranchBtn','researchLineageVal','policyOriginVal','hallVal','branchesVal','hallList','skillRetention','lrVal','klVal','epochsVal','retentionAlert','lineageVal','rehearsalVal','promotionVal','simSpeedVal','ppoMsVal','fpsVal','uiMsVal','validationMsVal','storageMsVal','curiosityInfluenceVal','curiosityAppliedVal','curiosityShareVal','curiosityResetsVal','curiosityBudgetUseVal','curiosityExhaustVal','curiosityModeSelect','startCuriosityAuditBtn','switchCuriosityAuditBtn','endCuriosityAuditBtn','curiosityAuditResults'])assert.match(html,new RegExp(`id="${id}"`));assert.match(html,/v0\.1\.4\.1\.3/);assert.match(html,/Fork New Learner/);assert.match(html,/Hall of Fame/);assert.match(html,/Adaptive/);assert.match(html,/observational only/);assert.match(html,/final holdout only diagnoses/)});
+test('v0.1.4.0.4 UI preserves Hall, branching, performance, lineage, rehearsal and curiosity-audit diagnostics',async()=>{const html=await readFile(new URL('../index.html',import.meta.url),'utf8');for(const id of ['brainSource','hallBrainOptions','bestOption','overallOption','foragerOption','survivorOption','efficiencyOption','pinChampionBtn','restoreBestBtn','branchSelect','switchBranchBtn','researchLineageVal','policyOriginVal','hallVal','branchesVal','hallList','skillRetention','lrVal','klVal','epochsVal','retentionAlert','lineageVal','rehearsalVal','promotionVal','simSpeedVal','ppoMsVal','fpsVal','uiMsVal','validationMsVal','storageMsVal','curiosityInfluenceVal','curiosityAppliedVal','curiosityShareVal','curiosityResetsVal','curiosityBudgetUseVal','curiosityExhaustVal','curiosityModeSelect','startCuriosityAuditBtn','switchCuriosityAuditBtn','endCuriosityAuditBtn','curiosityAuditResults'])assert.match(html,new RegExp(`id="${id}"`));assert.match(html,/v0\.1\.4\.2/);assert.match(html,/Fork New Learner/);assert.match(html,/Hall of Fame/);assert.match(html,/Adaptive/);assert.match(html,/observational only/);assert.match(html,/final holdout only diagnoses/)});
 
 test('skill-regression streak stays observational until paired confidence confirmation',()=>{const stages=[{stage:0,name:'Motor Nursery',skillScore:.33,skillCiLow:.25,skillCiHigh:.41}];const best=[{stage:0,name:'Motor Nursery',score:.74,ciLow:.66,ciHigh:.82,atSteps:1000},null,null,null];const a=assessSkillRetention(stages,best,[0,0,0,0]);assert.equal(a.alerts.length,1);assert.equal(a.alerts[0].severity,'catastrophic');assert.equal(a.alerts[0].confirmed,false);const b=assessSkillRetention(stages,best,a.streaks);assert.equal(b.alerts[0].confirmed,false);assert.equal(b.alerts[0].repeatObserved,true);assert.equal(b.alerts[0].streak,2)});
 test('final held-out generalization suite is all-skills and isolated from validation',()=>{const m=new RecurrentActorCritic(77);const r=evaluateHeldoutGeneralizationSuite(m,{episodesPerStage:2,seedBase:'heldout:final:test'});assert.equal(r.stageResults.length,CURRICULUM.length);assert.equal(r.episodes,2*CURRICULUM.length);assert.match(r.protocol,/heldout-generalization-v2/);assert.doesNotMatch(r.protocol,/validation:v3/)});
@@ -421,7 +421,7 @@ test('evaluation code remains curiosity-free and cannot award intrinsic reward',
   assert.deepEqual(a,b);
 });
 
-test('schema-6 migration preserves old policy and starts a fresh curiosity model; schema-10 then roundtrips it',()=>{
+test('schema-6 migration preserves old policy and starts a fresh curiosity model; schema-11 then roundtrips it',()=>{
   const a=new TrainingSession({seed:306,envCount:2,autoCurriculum:false});
   a.trainRollout(8);
   const current=a.snapshot();
@@ -515,7 +515,7 @@ test('curiosity A/B switch restores branch-specific reward influence and branch-
   assert.equal(s.learnerExperienceSteps,123456);
 });
 
-test('schema-10 roundtrip preserves an active curiosity audit and schema-7 migration defaults safely to reward-on with no audit',()=>{
+test('schema-11 roundtrip preserves an active curiosity audit and schema-7 migration defaults safely to reward-on with no audit',()=>{
   const a=new TrainingSession({seed:405,envCount:2,autoCurriculum:true});
   a.startCuriosityAudit();
   a.learnerExperienceSteps=654321;
@@ -596,14 +596,14 @@ test('PPO stability observatory exposes finite gradient, critic and parameter-mo
   assert.ok(['STABLE','WATCH','UPDATE SPIKE','GUARD'].includes(s.stabilitySummary().status));
 });
 
-test('schema-10 persists stability capture history and regression events while schema-8 migrates with empty telemetry',()=>{
+test('schema-11 persists stability capture history and regression events while schema-8 migrates with empty telemetry',()=>{
   const a=new TrainingSession({seed:511,envCount:2,autoCurriculum:false});
   a.totalSteps=CONFIG.stability.captureIntervalSteps;
   a.nextValidationStep=Number.MAX_SAFE_INTEGER;
   a.trainRollout(8);
   a.stabilityEvents.push({atSteps:a.totalSteps,trigger:'test-observation',balancedDelta:-0.2});
   const snap=a.snapshot();
-  assert.equal(snap.schema,10);
+  assert.equal(snap.schema,11);
   assert.ok(snap.stabilityHistory.length>=1);
   const b=new TrainingSession({seed:512,envCount:2,autoCurriculum:false});
   b.restore(snap);
@@ -617,11 +617,11 @@ test('schema-10 persists stability capture history and regression events while s
   assert.ok(c.nextStabilityCaptureStep>c.totalSteps);
 });
 
-test('schema-10 persists paired-validation reference/history while schema-9 migrates safely without invented confirmation evidence',()=>{
+test('schema-11 persists paired-validation reference/history while schema-9 migrates safely without invented confirmation evidence',()=>{
   const a=new TrainingSession({seed:515,envCount:1,autoCurriculum:false});
   a.runValidation();
   const snap=a.snapshot();
-  assert.equal(snap.schema,10);assert.ok(snap.validationReference?.model);assert.ok(snap.validationConfidenceHistory.length>=1);
+  assert.equal(snap.schema,11);assert.ok(snap.validationReference?.model);assert.ok(snap.validationConfidenceHistory.length>=1);
   const b=new TrainingSession({seed:516,envCount:1,autoCurriculum:false});b.restore(snap);
   assert.deepEqual(b.validationReference,a.validationReference);assert.deepEqual(b.validationConfidenceHistory,a.validationConfidenceHistory);
   const legacy=structuredClone(snap);legacy.schema=9;delete legacy.validationReference;delete legacy.validationConfidenceHistory;
@@ -692,7 +692,7 @@ test('v0.1.3.3 visual milestone does not change policy, PPO, curiosity, curricul
   assert.match(config,/rewardScale: 0\.0048/);assert.match(config,/maxEpisodeBonus: 0\.25/);
   assert.match(config,/clip: 0\.12/);assert.match(config,/learningRate: 0\.00015/);assert.match(config,/maxGradNorm: 0\.5/);
   assert.match(config,/\[0\.10, 0\.15, 0\.20, 0\.55\]/);
-  assert.match(session,/schema: 10/);
+  assert.match(session,/schema: 11/);
 });
 
 
@@ -721,7 +721,7 @@ test('spawn-clearance hotfix keeps the accepted policy, PPO, curiosity, curricul
   assert.match(config,/rewardScale: 0\.0048/);assert.match(config,/maxEpisodeBonus: 0\.25/);
   assert.match(config,/clip: 0\.12/);assert.match(config,/learningRate: 0\.00015/);assert.match(config,/maxGradNorm: 0\.5/);
   assert.match(config,/\[0\.10, 0\.15, 0\.20, 0\.55\]/);
-  assert.match(session,/schema: 10/);
+  assert.match(session,/schema: 11/);
 });
 
 
@@ -844,4 +844,75 @@ test('Decision HUD refresh is decoupled from expensive off-screen LIVE canvas re
   const liveBlock=main.slice(liveRenderStart,liveRenderEnd);
   assert.match(liveBlock,/worldOnscreen \|\| brainOnscreen/);
   assert.match(main,/learnUiHz: 5|learnUiHz/);
+});
+
+test('record-progress approach reward removes retreat penalty without allowing return-to-old-distance farming',()=>{
+  const stage={id:99,name:'reward probe',foods:1,hazards:0,walls:0};
+  const make=mode=>{const w=new World(8801,stage,{approachRewardMode:mode});w.walls=[];w.hazards=[];w.agent={x:.5,y:.5,vx:0,vy:0,angle:0,omega:0,energy:1};w.food=[{x:.8,y:.5,r:CONFIG.world.foodRadius}];w.prevFoodDist=w.nearestFoodDistance();w.bestFoodDist=w.prevFoodDist;return w};
+  const legacy=make('legacy'),candidate=make('record-progress');
+  legacy.agent.vx=-.01;candidate.agent.vx=-.01;
+  const a=legacy.step(0),b=candidate.step(0);
+  assert.ok(a.info.rewardParts.approach<0,'legacy reward should penalize moving away');
+  assert.equal(b.info.rewardParts.approach,0,'candidate retreat should be neutral');
+  candidate.agent.x=.5;candidate.agent.vx=0;candidate.prevFoodDist=.35;candidate.bestFoodDist=.3;
+  const revisit=candidate.step(0);
+  assert.equal(revisit.info.rewardParts.approach,0,'returning only to the already-earned best distance must not farm reward');
+  candidate.agent.x=.51;candidate.agent.vx=0;candidate.prevFoodDist=.3;
+  const newRecord=candidate.step(0);
+  assert.ok(newRecord.info.rewardParts.approach>0,'genuinely closer distance should earn dense approach reward');
+});
+
+test('detour A/B starts from matched learner bytes and differs only in approach reward mode',()=>{
+  const s=new TrainingSession({seed:8802,envCount:2,autoCurriculum:true});
+  s.nextValidationStep=Number.MAX_SAFE_INTEGER;s.trainRollout(8);
+  const before={model:s.model.serialize(),optimizer:s.trainer.serialize(),curiosity:s.curiosity.serialize(),curriculum:s.curriculum.serialize(),envSeedCursor:s.envSeedCursor,actionRngState:s.actionRng.state>>>0};
+  const audit=s.startDetourAudit({targetStepsPerBranch:100000,checkpointInterval:50000});
+  assert.equal(audit.active,true);assert.equal(audit.role,'control');assert.equal(s.approachRewardMode,'legacy');assert.equal(s.autoCurriculum,false);
+  const d=s.frozenLearners.find(x=>x.detourAuditRole==='detour');assert.ok(d);
+  assert.deepEqual(d.model,before.model);assert.deepEqual(d.optimizer,before.optimizer);assert.deepEqual(d.curiosity,before.curiosity);assert.deepEqual(d.curriculum,before.curriculum);
+  assert.equal(d.envSeedCursor,before.envSeedCursor);assert.equal(d.actionRngState,before.actionRngState);assert.equal(d.approachRewardMode,'record-progress');
+  assert.deepEqual(s.model.serialize(),before.model);assert.deepEqual(s.trainer.serialize(),before.optimizer);assert.deepEqual(s.curiosity.serialize(),before.curiosity);
+});
+
+test('detour A/B branch switching restores branch-local progress and reward mechanism',()=>{
+  const s=new TrainingSession({seed:8803,envCount:2,autoCurriculum:true});
+  s.startDetourAudit({targetStepsPerBranch:100000,checkpointInterval:50000});
+  s.learnerExperienceSteps=12345;
+  s.switchDetourAuditBranch('detour');
+  assert.equal(s.detourAuditRole,'detour');assert.equal(s.approachRewardMode,'record-progress');assert.equal(s.learnerExperienceSteps,0);
+  const control=s.frozenLearners.find(x=>x.detourAuditRole==='control');assert.equal(control.learnerExperienceSteps,12345);assert.equal(control.approachRewardMode,'legacy');
+  s.learnerExperienceSteps=23456;
+  s.switchDetourAuditBranch('control');
+  assert.equal(s.detourAuditRole,'control');assert.equal(s.approachRewardMode,'legacy');assert.equal(s.learnerExperienceSteps,12345);
+  const detour=s.frozenLearners.find(x=>x.detourAuditRole==='detour');assert.equal(detour.learnerExperienceSteps,23456);assert.equal(detour.approachRewardMode,'record-progress');
+});
+
+test('schema-11 roundtrip preserves active detour A/B while schema-10 migrates to legacy reward with no detour audit',()=>{
+  const a=new TrainingSession({seed:8804,envCount:2,autoCurriculum:true});
+  a.startDetourAudit({targetStepsPerBranch:100000,checkpointInterval:50000});a.learnerExperienceSteps=3210;
+  const snap=a.snapshot();assert.equal(snap.schema,11);
+  const b=new TrainingSession({seed:1,envCount:2,autoCurriculum:true});b.restore(snap);
+  assert.equal(b.detourAudit.active,true);assert.equal(b.detourAuditRole,'control');assert.equal(b.approachRewardMode,'legacy');assert.equal(b.learnerExperienceSteps,3210);assert.equal(b.autoCurriculum,false);
+  const legacy=structuredClone(snap);legacy.schema=10;for(const k of ['approachRewardMode','detourAudit','detourAuditRole'])delete legacy[k];
+  const c=new TrainingSession({seed:2,envCount:2,autoCurriculum:true});c.restore(legacy);
+  assert.equal(c.approachRewardMode,'legacy');assert.equal(c.detourAudit.active,false);assert.equal(c.detourAuditRole,null);
+  assert.deepEqual(c.model.serialize(),a.model.serialize());
+});
+
+test('detour A/B uses the same PPO schedule age at equal branch-local progress',()=>{
+  const s=new TrainingSession({seed:8805,envCount:2,autoCurriculum:true});s.totalSteps=250000;
+  s.startDetourAudit({targetStepsPerBranch:100000,checkpointInterval:50000});
+  const capture=()=>{const original=s.trainer.update.bind(s.trainer);let seen=null;s.trainer.update=(...args)=>{seen=args[3]?.trainingStep;return original(...args)};s.trainRollout(4);s.trainer.update=original;return seen};
+  const control=capture();
+  s.switchDetourAuditBranch('detour');
+  const detour=capture();
+  assert.equal(control,detour);assert.equal(control,250008);
+});
+
+test('detour learning A/B UI is explicit, matched, reversible and has no automatic winner',async()=>{
+  const html=await readFile(new URL('../index.html',import.meta.url),'utf8');
+  const main=await readFile(new URL('../src/app/main.js',import.meta.url),'utf8');
+  for(const id of ['startDetourAuditBtn','switchDetourAuditBtn','endDetourAuditBtn','detourAuditRoleVal','detourControlProgressVal','detourRewardProgressVal','detourPairCheckpointVal','detourBlockedReachVal','detourTrapDeltaVal','detourAuditResults'])assert.match(html,new RegExp(`id="${id}"`));
+  assert.match(html,/DETOUR LEARNING A\/B/);assert.match(html,/new closest-distance records/i);assert.match(html,/No pathfinder, extra sensor, scripted detour, or automatic winner selection/i);
+  assert.match(main,/startDetourAudit\(/);assert.match(main,/switchDetourAuditBranch\(/);assert.match(main,/endDetourAudit\(/);assert.match(main,/No automatic winner was selected/i);
 });

@@ -287,6 +287,27 @@
       </div>
     </details>
 
+    <details class="panel detourAuditPanel collapsiblePanel" data-observatory-view="research" hidden aria-label="Detour learning reward A/B audit">
+      <summary class="panelSummary"><strong>DETOUR LEARNING A/B</strong><span id="detourCompactSummary">matched descendants • reward mechanism only</span></summary>
+      <div class="collapsibleBody">
+        <div class="stabilityNotice">Controlled learning experiment. The CURRENT Learner is preserved first, then two matched descendants begin from identical policy, optimizer, curiosity predictor, curriculum, environment cursor and action RNG bytes. CONTROL keeps the legacy signed straight-line approach reward. DETOUR rewards only new closest-distance records, so temporary retreat is neutral and returning to an already-earned distance cannot farm reward. No pathfinder, extra sensor, scripted detour, or automatic winner selection is added.</div>
+        <div class="curiosityAuditActions">
+          <button id="startDetourAuditBtn" title="Preserve the current learner and create matched legacy-reward and record-progress descendants.">Start 2M + 2M Detour A/B</button>
+          <button id="switchDetourAuditBtn" disabled title="Freeze the active experimental descendant exactly and continue its matched counterpart.">Switch A/B Branch</button>
+          <button id="endDetourAuditBtn" disabled title="End the experiment without automatically promoting either branch. The currently active branch remains active.">End Audit</button>
+        </div>
+        <div class="curiosityAuditGrid">
+          <div><span>active branch</span><b id="detourAuditRoleVal">none</b></div>
+          <div><span>control progress</span><b id="detourControlProgressVal">—</b></div>
+          <div><span>detour progress</span><b id="detourRewardProgressVal">—</b></div>
+          <div><span>paired checkpoint</span><b id="detourPairCheckpointVal">—</b></div>
+          <div><span>blocked reach Δ</span><b id="detourBlockedReachVal">—</b></div>
+          <div><span>trap Δ</span><b id="detourTrapDeltaVal">—</b></div>
+        </div>
+        <div id="detourAuditResults" class="curiosityAuditResults">Audit idle. Load the learner you want to preserve, then start the matched experiment. Training pauses at each fixed checkpoint for read-only retention and seven-geometry occlusion evaluation.</div>
+      </div>
+    </details>
+
     <details class="panel curiosityPanel collapsiblePanel" data-observatory-view="predict" open hidden aria-label="Curiosity and prediction model">
       <summary class="panelSummary"><strong>CURIOSITY / PREDICTION</strong><span id="curiosityCompactSummary">learned forward model • evaluation curiosity OFF</span></summary>
       <div class="collapsibleBody">
@@ -346,7 +367,7 @@
       <div class="collapsibleBody"><div id="resultsText" class="resultsText">No evaluation run yet.</div></div>
     </details>
 
-    <footer>MicroMind v0.1.4.1.3 broadens the read-only occlusion diagnostic into rotation-trap and detour characterization across seven paired geometries. Learning math, curiosity, curriculum, policy observations, world physics, save schema, and protected Champion behavior remain unchanged.</footer>
+    <footer>MicroMind v0.1.4.2 adds a protected Detour Learning A/B experiment. CONTROL keeps the legacy signed approach reward; DETOUR changes only dense approach shaping to reward new closest-distance records. Policy architecture, observations, sensors, PPO, curiosity, physics, curriculum mix, Champions and the seven-geometry diagnostic remain otherwise unchanged.</footer>
   </main>
   <script type="module" src="./src/app/main.js"></script>
 </body>

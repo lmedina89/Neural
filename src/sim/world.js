@@ -62,9 +62,10 @@ function clearPoint(rng, occupied, radius = 0.08, tries = 100) {
 }
 
 export class World {
-  constructor(seed, stage) {
+  constructor(seed, stage, { approachRewardMode = 'legacy' } = {}) {
     this.seed = seed >>> 0;
     this.stage = stage;
+    this.approachRewardMode = approachRewardMode === 'record-progress' ? 'record-progress' : 'legacy';
     this.rng = new PRNG(this.seed);
     this.reset();
   }
@@ -106,6 +107,7 @@ export class World {
     // exact geometry. Only a genuinely tight/invalid spawn is corrected here.
     this.correctSpawnClearance();
     this.prevFoodDist = this.nearestFoodDistance();
+    this.bestFoodDist = this.prevFoodDist;
     return this.observe();
   }
 
@@ -271,7 +273,23 @@ export class World {
       }
     }
     const newD = this.nearestFoodDistance();
-    if (!ate) { rewardParts.approach = clamp((this.prevFoodDist - newD) * rw.approachScale, -0.01, 0.01); reward += rewardParts.approach; }
+    if (!ate) {
+      if (this.approachRewardMode === 'record-progress') {
+        // Candidate detour-learning reward: only reward genuinely new proximity
+        // records. Temporary retreat is neutral instead of punished, and moving
+        // away then returning to an already-earned distance cannot farm reward.
+        const recordProgress = Math.max(0, (this.bestFoodDist ?? this.prevFoodDist) - newD);
+        rewardParts.approach = clamp(recordProgress * rw.approachScale, 0, 0.01);
+        this.bestFoodDist = Math.min(this.bestFoodDist ?? newD, newD);
+      } else {
+        rewardParts.approach = clamp((this.prevFoodDist - newD) * rw.approachScale, -0.01, 0.01);
+      }
+      reward += rewardParts.approach;
+    } else {
+      // Food respawn creates a new target landscape. Start the record-progress
+      // ledger from the new nearest-food distance without awarding spawn credit.
+      this.bestFoodDist = newD;
+    }
     this.prevFoodDist = newD;
     if (a.energy <= 0) { rewardParts.death = rw.death; reward += rw.death; this.done = true; }
     if (this.stepCount >= CONFIG.world.maxSteps) this.done = true;

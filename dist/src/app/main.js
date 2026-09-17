@@ -53,6 +53,9 @@ const el = {
   orientationProtocol: $('orientationProtocolVal'), orientationRear: $('orientationRearVal'), orientationSpin: $('orientationSpinVal'), orientationResults: $('orientationResultsText'),
   spinCompactSummary: $('spinCompactSummary'), spinRecorderStatus: $('spinRecorderStatusVal'), spinEventCount: $('spinEventCountVal'), spinBlockedRate: $('spinBlockedRateVal'), spinLatestCause: $('spinLatestCauseVal'),
   spinResults: $('spinResultsText'), spinClear: $('spinClearBtn'), spinOcclusionRun: $('spinOcclusionRunBtn'), spinOcclusionResults: $('spinOcclusionResultsText'),
+  detourCompactSummary: $('detourCompactSummary'), startDetourAudit: $('startDetourAuditBtn'), switchDetourAudit: $('switchDetourAuditBtn'), endDetourAudit: $('endDetourAuditBtn'),
+  detourAuditRole: $('detourAuditRoleVal'), detourControlProgress: $('detourControlProgressVal'), detourRewardProgress: $('detourRewardProgressVal'),
+  detourPairCheckpoint: $('detourPairCheckpointVal'), detourBlockedReach: $('detourBlockedReachVal'), detourTrapDelta: $('detourTrapDeltaVal'), detourAuditResults: $('detourAuditResults'),
   observatoryNav: $('observatoryNav'), observatoryViewNote: $('observatoryViewNote'),
   predictWorld: $('predictWorldCanvas'), predictWorldMeta: $('predictWorldMeta'),
   memoryCanvas: $('memoryCanvas'), memoryMeta: $('memoryMeta'), memoryInspect: $('memoryInspect'),
@@ -435,19 +438,34 @@ async function trainTick() {
         lastStorageDurationMs = performance.now() - saveStarted;
         await refreshSaveSlots();
       } catch (saveErr) {
-        console.warn('Curiosity audit autosave failed', saveErr);
+        console.warn(`${result.auditKind || 'A/B'} audit autosave failed`, saveErr);
       }
-      setStatus(`Curiosity A/B ${String(a.role).toUpperCase()} checkpoint @ ${Number(a.checkpointSteps).toLocaleString()} branch steps: balanced ${(a.validation.balancedScore * 100).toFixed(1)}%. Same fixed audit seeds; Champion promotion remains suspended.`);
+      if (result.auditKind === 'detour') {
+        const occ = a.occlusion?.cases || [];
+        const blocked = occ.filter(x => x.initialPathBlocked);
+        const blockedReach = blocked.length ? blocked.reduce((sum, x) => sum + Number(x.reachRate || 0), 0) / blocked.length : 0;
+        setStatus(`Detour A/B ${String(a.role).toUpperCase()} checkpoint @ ${Number(a.checkpointSteps).toLocaleString()} branch steps: balanced ${(a.validation.balancedScore * 100).toFixed(1)}% • blocked reach ${(blockedReach * 100).toFixed(0)}%. Same fixed audit seeds; Champion promotion remains suspended.`);
+      } else {
+        setStatus(`Curiosity A/B ${String(a.role).toUpperCase()} checkpoint @ ${Number(a.checkpointSteps).toLocaleString()} branch steps: balanced ${(a.validation.balancedScore * 100).toFixed(1)}%. Same fixed audit seeds; Champion promotion remains suspended.`);
+      }
     }
     if (result.auditBranchComplete) {
       forceUi = true;
       paused = true;
       el.pause.textContent = 'Resume';
-      const audit = session.curiosityAuditSummary();
-      const other = audit.role === 'control' ? 'CURIOSITY' : 'CONTROL';
-      setStatus(audit.completed
-        ? 'Curiosity A/B audit complete on both branches. Training paused. No winner was promoted automatically; review the paired results and End Audit when ready.'
-        : `${String(audit.role || '').toUpperCase()} branch reached ${Number(audit.targetStepsPerBranch).toLocaleString()} audit steps. Training paused. Switch to ${other} to run the matched branch.`);
+      if (result.auditKind === 'detour') {
+        const audit = session.detourAuditSummary();
+        const other = audit.role === 'control' ? 'DETOUR' : 'CONTROL';
+        setStatus(audit.completed
+          ? 'Detour A/B audit complete on both branches. Training paused. No winner was selected automatically; review retention + occlusion results and End Audit when ready.'
+          : `${String(audit.role || '').toUpperCase()} branch reached ${Number(audit.targetStepsPerBranch).toLocaleString()} audit steps. Training paused. Switch to ${other} to run the matched branch.`);
+      } else {
+        const audit = session.curiosityAuditSummary();
+        const other = audit.role === 'control' ? 'CURIOSITY' : 'CONTROL';
+        setStatus(audit.completed
+          ? 'Curiosity A/B audit complete on both branches. Training paused. No winner was promoted automatically; review the paired results and End Audit when ready.'
+          : `${String(audit.role || '').toUpperCase()} branch reached ${Number(audit.targetStepsPerBranch).toLocaleString()} audit steps. Training paused. Switch to ${other} to run the matched branch.`);
+      }
     }
     maybeUpdateUI(forceUi);
     setTimeout(trainTick, nextTrainingDelay(budgetKey, b.delay));
@@ -701,8 +719,9 @@ function updateUI() {
   }
 
   el.curiosityMode.value = session.curiosityRewardMode;
-  el.curiosityMode.disabled = audit.active;
-  el.startCuriosityAudit.disabled = audit.active;
+  const detourAudit = session.detourAuditSummary();
+  el.curiosityMode.disabled = audit.active || detourAudit.active;
+  el.startCuriosityAudit.disabled = audit.active || detourAudit.active;
   el.switchCuriosityAudit.disabled = !audit.active;
   el.endCuriosityAudit.disabled = !audit.active;
   el.curiosityAuditRole.textContent = audit.active ? `${String(audit.role || '—').toUpperCase()} • ${session.curiosityRewardMode === 'reward' ? 'reward on' : 'reward 0'}` : 'none';
@@ -714,6 +733,22 @@ function updateUI() {
   el.curiosityRewardScore.textContent = Number.isFinite(audit.comparison?.curiosityScore) ? pct(audit.comparison.curiosityScore) : '—';
   el.switchCuriosityAudit.textContent = audit.active ? `Switch to ${audit.role === 'control' ? 'CURIOSITY' : 'CONTROL'}` : 'Switch A/B Branch';
   el.curiosityAuditResults.textContent = formatCuriosityAuditResults(audit);
+
+  const detourTarget = Number(detourAudit.targetStepsPerBranch || CONFIG.detourAudit.targetStepsPerBranch);
+  el.startDetourAudit.disabled = detourAudit.active || audit.active;
+  el.switchDetourAudit.disabled = !detourAudit.active;
+  el.endDetourAudit.disabled = !detourAudit.active;
+  el.detourAuditRole.textContent = detourAudit.active ? `${String(detourAudit.role || '—').toUpperCase()} • ${detourAudit.rewardMode === 'record-progress' ? 'record progress' : 'legacy signed'}` : 'none';
+  el.detourControlProgress.textContent = detourAudit.id ? `${Number(detourAudit.controlProgress || 0).toLocaleString()} / ${detourTarget.toLocaleString()}` : '—';
+  el.detourRewardProgress.textContent = detourAudit.id ? `${Number(detourAudit.detourProgress || 0).toLocaleString()} / ${detourTarget.toLocaleString()}` : '—';
+  el.detourPairCheckpoint.textContent = Number.isFinite(detourAudit.comparison?.checkpointSteps) ? Number(detourAudit.comparison.checkpointSteps).toLocaleString() : '—';
+  el.detourBlockedReach.textContent = Number.isFinite(detourAudit.comparison?.blockedReachDelta) ? signedPoints(detourAudit.comparison.blockedReachDelta) : '—';
+  el.detourTrapDelta.textContent = Number.isFinite(detourAudit.comparison?.trapRateDelta) ? signedPoints(detourAudit.comparison.trapRateDelta) : '—';
+  el.switchDetourAudit.textContent = detourAudit.active ? `Switch to ${detourAudit.role === 'control' ? 'DETOUR' : 'CONTROL'}` : 'Switch A/B Branch';
+  el.detourCompactSummary.textContent = detourAudit.active
+    ? `${String(detourAudit.role || '').toUpperCase()} • ${Number(detourAudit.role === 'control' ? detourAudit.controlProgress : detourAudit.detourProgress).toLocaleString()} / ${detourTarget.toLocaleString()} • ${detourAudit.rewardMode === 'record-progress' ? 'record-progress reward' : 'legacy reward'}`
+    : detourAudit.completed ? 'completed • paired results preserved' : 'matched descendants • reward mechanism only';
+  el.detourAuditResults.textContent = formatDetourAuditResults(detourAudit);
 
   const stability = session.stabilitySummary();
   el.stabilityStatus.textContent = stability.status;
@@ -824,6 +859,38 @@ function formatCuriosityAuditResults(audit) {
   if (audit.completed) lines.push('Both branches reached the target. No winner was promoted automatically; review the paired results, then End Audit when ready.');
   else if (audit.active) lines.push(`ACTIVE ${String(audit.role || '').toUpperCase()}: ordinary Champion promotion is suspended until this audit ends.`);
   else lines.push('Audit ended. Results are preserved in the checkpoint; no branch was automatically promoted.');
+  return lines.join('\n');
+}
+
+function formatDetourAuditResults(audit) {
+  if (!audit?.id) return 'Audit idle. Load the learner you want to preserve, then start the matched experiment. CONTROL keeps the legacy signed approach reward; DETOUR changes only dense approach shaping to new closest-distance records.';
+  const lines = [];
+  const origin = audit.results?.find(x => x.role === 'origin');
+  lines.push(`${audit.id} • origin @ ${Number(audit.originSteps || 0).toLocaleString()} global steps${Number.isFinite(origin?.balancedScore) ? ` • baseline ${pct(origin.balancedScore)}` : ''}`);
+  const checkpoints = [...new Set((audit.results || []).filter(x => x.role !== 'origin').map(x => Number(x.checkpointSteps) || 0))].sort((a, b) => a - b);
+  for (const cp of checkpoints) {
+    const c = audit.results.find(x => x.role === 'control' && Number(x.checkpointSteps) === cp);
+    const d = audit.results.find(x => x.role === 'detour' && Number(x.checkpointSteps) === cp);
+    const blockedMean = row => {
+      const cases = row?.occlusion?.cases?.filter(x => x.initialPathBlocked) || [];
+      return cases.length ? cases.reduce((sum, x) => sum + Number(x.reachRate || 0), 0) / cases.length : null;
+    };
+    const trapMean = row => {
+      const cases = row?.occlusion?.cases?.filter(x => x.initialPathBlocked) || [];
+      return cases.length ? cases.reduce((sum, x) => sum + Number(x.rotationTrapRate || 0), 0) / cases.length : null;
+    };
+    const cb = blockedMean(c), db = blockedMean(d), ct = trapMean(c), dt = trapMean(d);
+    lines.push(`${cp.toLocaleString()} branch steps • CONTROL balanced ${Number.isFinite(c?.balancedScore) ? pct(c.balancedScore) : '—'} blocked reach ${Number.isFinite(cb) ? pct(cb) : '—'} trap ${Number.isFinite(ct) ? pct(ct) : '—'} • DETOUR balanced ${Number.isFinite(d?.balancedScore) ? pct(d.balancedScore) : '—'} blocked reach ${Number.isFinite(db) ? pct(db) : '—'} trap ${Number.isFinite(dt) ? pct(dt) : '—'}`);
+  }
+  const cmp = audit.comparison;
+  if (Number.isFinite(cmp?.checkpointSteps)) {
+    lines.push(`latest paired @ ${Number(cmp.checkpointSteps).toLocaleString()} • balanced Δ ${signedPoints(cmp.balancedDelta)} • blocked reach Δ ${signedPoints(cmp.blockedReachDelta)} • successful-detour Δ ${signedPoints(cmp.detourRateDelta)} • trap Δ ${signedPoints(cmp.trapRateDelta)}`);
+  } else {
+    lines.push('Paired comparison: waiting until CONTROL and DETOUR reach the same checkpoint.');
+  }
+  if (audit.completed) lines.push('Both descendants reached the target. No winner was selected automatically. Review retention and occlusion evidence before deciding which branch, if either, should continue.');
+  else if (audit.active) lines.push(`ACTIVE ${String(audit.role || '').toUpperCase()}: ordinary validation/Champion promotion is suspended; the other descendant remains frozen and recoverable.`);
+  else lines.push('Audit ended. The currently active descendant remains active; results and the preserved origin remain stored.');
   return lines.join('\n');
 }
 
@@ -957,7 +1024,7 @@ function syncArchiveControls() {
     for (const branch of branches) {
       const option = document.createElement('option');
       option.value = branch.id;
-      const auditTag = branch.auditRole ? ` • A/B ${branch.auditRole.toUpperCase()}` : '';
+      const auditTag = branch.auditRole ? ` • CUR A/B ${branch.auditRole.toUpperCase()}` : branch.detourAuditRole ? ` • DETOUR A/B ${branch.detourAuditRole.toUpperCase()}` : '';
       option.textContent = `${branch.id} • frozen @ ${Number(branch.frozenAtSteps || 0).toLocaleString()} • ${Number(branch.learnerExperienceSteps || 0).toLocaleString()} branch steps${auditTag}`;
       el.branchSelect.append(option);
     }
@@ -969,7 +1036,7 @@ function syncArchiveControls() {
   if (ref.type !== 'learner' && !ref.brain?.model) el.brainSource.value = 'latest';
   const currentRef = selectedBrainRef();
   const forkTarget = currentRef.type === 'learner' ? session.getArchiveBrain('balanced') : currentRef.brain;
-  const auditActive = Boolean(session.curiosityAudit?.active);
+  const auditActive = Boolean(session.curiosityAudit?.active || session.detourAudit?.active);
   el.restoreBest.disabled = auditActive || session.archiveNeedsRebaseline || !forkTarget?.model;
   el.pinChampion.disabled = session.archiveNeedsRebaseline || currentRef.type !== 'champion' || !currentRef.brain?.model;
   el.switchBranch.disabled = auditActive || el.branchSelect.value === 'active' || !session.frozenLearners.some(x => x.id === el.branchSelect.value);
@@ -1347,6 +1414,74 @@ el.endCuriosityAudit.addEventListener('click', async () => {
     updateUI();
     setStatus('Curiosity A/B audit ended. Results are preserved; no automatic winner was selected. Ordinary validation is scheduled for the active Learner before long training resumes.');
   } catch (e) { setStatus(`Could not end curiosity audit: ${e.message}`); }
+});
+
+el.startDetourAudit.addEventListener('click', async () => {
+  if (session.detourAudit?.active) return;
+  if (!confirm(`Start the controlled Detour Learning A/B from the CURRENT Learner @ ${session.totalSteps.toLocaleString()} steps? The current lineage will be frozen as the recoverable origin. Two matched descendants will be created from identical policy, optimizer, curiosity, curriculum and RNG state: CONTROL keeps the legacy signed straight-line approach reward; DETOUR rewards only new closest-distance records. Each branch runs ${CONFIG.detourAudit.targetStepsPerBranch.toLocaleString()} steps with fixed read-only retention + occlusion evaluations.`)) return;
+  paused = true;
+  el.pause.textContent = 'Resume';
+  try {
+    const existing = await loadCheckpointRecord('latest');
+    const storedSteps = Number(existing?.snapshot?.totalSteps || 0);
+    if (existing && storedSteps > session.totalSteps) {
+      setStatus(`Detour A/B NOT started: your protected Manual Save has ${storedSteps.toLocaleString()} steps, newer than the current ${session.totalSteps.toLocaleString()}-step learner. Load Manual first so we do not audit the wrong brain.`);
+      await refreshSaveSlots();
+      return;
+    }
+    const saveStarted = performance.now();
+    await saveCheckpoint(session.snapshot(), 'latest');
+    await persistHallOfFame();
+    lastStorageDurationMs = performance.now() - saveStarted;
+    setStatus('Preserved the exact pre-experiment learner. Building matched CONTROL and DETOUR descendants and running the read-only baseline…');
+    await yieldUI();
+    const audit = session.startDetourAudit();
+    await saveCheckpoint(session.snapshot(), 'autosave');
+    await refreshSaveSlots();
+    resetTrainRateMeter();
+    controlSignature = '';
+    el.brainSource.value = 'latest';
+    resetViewState();
+    updateUI();
+    setStatus(`Detour A/B ${audit.id} ready. CONTROL is active first with the original signed approach reward. Training is paused—press Resume or Learn when ready.`);
+  } catch (e) {
+    setStatus(`Detour A/B start failed: ${e.message}`);
+  }
+});
+
+el.switchDetourAudit.addEventListener('click', async () => {
+  const audit = session.detourAuditSummary();
+  if (!audit.active) return;
+  const nextRole = audit.role === 'control' ? 'detour' : 'control';
+  const currentProgress = audit.role === 'control' ? audit.controlProgress : audit.detourProgress;
+  if (currentProgress < audit.targetStepsPerBranch && !confirm(`${String(audit.role || '').toUpperCase()} has only ${Number(currentProgress).toLocaleString()} / ${Number(audit.targetStepsPerBranch).toLocaleString()} audit steps. Switch early to ${nextRole.toUpperCase()}? You can switch back later; the current branch will be frozen exactly.`)) return;
+  paused = true;
+  el.pause.textContent = 'Resume';
+  try {
+    const event = session.switchDetourAuditBranch(nextRole);
+    resetTrainRateMeter();
+    await saveCheckpoint(session.snapshot(), 'autosave');
+    controlSignature = '';
+    el.brainSource.value = 'latest';
+    resetViewState();
+    updateUI();
+    setStatus(`Detour A/B switched to ${nextRole.toUpperCase()} (${event.lineageId}). Policy, optimizer, curiosity predictor, curriculum and RNG continuation restored for that descendant. Training is paused—press Resume or Learn when ready.`);
+  } catch (e) { setStatus(`Detour A/B branch switch failed: ${e.message}`); }
+});
+
+el.endDetourAudit.addEventListener('click', async () => {
+  const audit = session.detourAuditSummary();
+  if (!audit.active) return;
+  if (!confirm('End the Detour Learning A/B audit? No branch will be selected or promoted automatically. The currently active descendant and its current reward mode will remain active; the preserved origin and other branch remain recoverable.')) return;
+  paused = true;
+  el.pause.textContent = 'Resume';
+  try {
+    session.endDetourAudit();
+    await saveCheckpoint(session.snapshot(), 'autosave');
+    controlSignature = '';
+    updateUI();
+    setStatus('Detour A/B ended. No automatic winner was selected. The active descendant remains the Learner and ordinary validation is scheduled before long training resumes.');
+  } catch (e) { setStatus(`Could not end Detour A/B: ${e.message}`); }
 });
 
 el.branchSelect.addEventListener('change', syncArchiveControls);

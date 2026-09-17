@@ -1,56 +1,57 @@
-# MicroMind v0.1.4.1.3 — Build Report
+# MicroMind v0.1.4.2 — Build Report
 
-**Version:** `0.1.4.1.3`  
-**Build marker:** `OCCCHAR-01413`  
-**Parent baseline:** v0.1.4.1.2 `OCCSPIN-01412`
+**Version:** `0.1.4.2`  
+**Build marker:** `DETOURAB-0142`  
+**Parent baseline:** v0.1.4.1.3 `OCCCHAR-01413`
 
 ## Objective
 
-Characterize the user-observed failure that appears when the target loses a clean/direct route, after v0.1.4.1.2 showed 0% food reach in the LOS-blocked controlled case despite successful OPEN and LOS-clear/path-blocked cases.
+Run a protected causal A/B test of the strongest mechanism suggested by the v0.1.4.1.3 occlusion characterization: the legacy signed straight-line approach reward may punish the temporary retreat/lateral motion needed to route around an obstacle.
 
-This build remains read-only. It broadens the previous continuous-spin detector into a rotation-trap detector and expands the controlled audit into multiple symmetric/asymmetric detour geometries before any learning change is attempted.
+The build deliberately avoids declaring that hypothesis correct. It preserves the current learner and compares two matched descendants before any permanent learning decision is made.
 
-## Implementation
+## Learning change under test
 
-1. Kept exact wall/food LOS and agent-radius direct-path diagnostics outside the neural observation.
-2. Replaced the narrow continuous-spin event threshold with `live-occlusion-rotation-trap:v2`.
-3. Rotation traps can now be detected by either large cumulative turning with poor food progress or smaller oscillatory loops with repeated turn reversals / food-bearing crossings.
-4. Live events now report cumulative/net turning, reversals, bearing crossings, turn/thrust/brake rates, away-from-food thrust, blocked-path/LOS rates, context classification, and recovery.
-5. Increased the bounded OBSERVE history window so turn–hesitate–reverse loops can be characterized without instrumenting the LEARN hot loop.
-6. Replaced the 3-case controlled check with `occlusion-failure-characterization:v2`: OPEN, CLEARANCE, NARROW CENTER, WIDE CENTER, LEFT-HEAVY, RIGHT-HEAVY, and LONG DETOUR.
-7. Controlled trials remain paired by start pose, food position, zero recurrent state, and stochastic-action RNG stream.
-8. Added path-clear rate/time, successful-detour rate, temporary retreat, lateral excursion, cumulative/net turns, turn reversals, food-bearing crossings, action mix, wall hits, and food reach.
-9. Learner and Balanced Champion audits retain serialize-before/after equality guards.
-10. All diagnostic state remains session-only; save schema remains **10**.
+`World` now accepts an explicit `approachRewardMode`.
 
-## Learning safety
+- **legacy**: accepted signed step-to-step distance shaping, including retreat penalties.
+- **record-progress**: positive dense reward only when the agent achieves a new closest distance; retreat is neutral and returning to an already-rewarded distance earns no additional approach reward.
 
-Compared with v0.1.4.1.2, the following learning/simulation/storage/runtime files remain byte-for-byte unchanged:
+All non-approach reward components remain unchanged.
 
-- `src/ai/model.js`
-- `src/ai/ppo.js`
-- `src/ai/rollout.js`
-- `src/ai/session.js`
-- `src/ai/curiosity.js`
-- `src/sim/world.js`
-- `src/sim/curriculum.js`
-- `src/evaluation/evaluator.js`
-- `src/storage/checkpoints.js`
-- `src/utils/prng.js`
-- `src/app/runtimeDiagnostics.js`
-- all visualization renderer modules
+## A/B controls
 
-Changed runtime code is limited to release identity, the read-only occlusion/rotation diagnostic module, Research/LIVE diagnostic presentation, and tests/docs.
+1. The exact pre-experiment Learner is frozen before either descendant is created.
+2. CONTROL and DETOUR start from identical policy, optimizer, curiosity, curriculum, environment-seed cursor, action RNG and rehearsal bytes.
+3. CONTROL uses `legacy`; DETOUR uses `record-progress`.
+4. PPO schedule age is based on the common audit origin plus branch-local learning experience, preventing the second-run branch from receiving a different learning-rate age merely because global steps are monotonic.
+5. Ordinary validation/Champion promotion and adaptive curriculum transitions are suspended during the experiment.
+6. Fixed 500k branch checkpoints run the same full retention suite plus `occlusion-failure-characterization:v2`.
+7. Branch switching freezes/restores branch-specific training state exactly.
+8. No automatic winner selection or Champion promotion occurs.
+9. The original learner remains a recoverable frozen branch.
+
+## Persistence
+
+Save schema advances **10 → 11** to store the approach reward mode and Detour A/B experiment/branch state. Schemas 1–10 remain supported and migrate to `legacy` with no active detour experiment.
+
+## Parent parity
+
+With no Detour A/B active, v0.1.4.2 defaults to `legacy`. A deterministic parent/candidate continuation using seed 539, 4 training environments and **3,456 training steps** produced exactly equal:
+
+- policy state;
+- PPO optimizer state;
+- curiosity predictor state;
+- curriculum state;
+- environment cursor;
+- stochastic action RNG state;
+- episodes and episode history;
+- rehearsal history;
+- learner-experience count.
+
+Thus merely deploying v0.1.4.2 does not alter accepted learning behavior until the controlled experiment is explicitly started.
 
 ## Verification
 
-- Full Node test suite: **100/100 passed**.
-- Static `dist/` rebuild completed successfully.
-- Release identity test confirms `0.1.4.1.3 / OCCCHAR-01413`.
-- Controlled failure-characterization audit is deterministic, paired, and model-read-only.
-- Live rotation-trap test verifies blocked wall/food conflict capture without policy feedback.
-- Policy observation size and existing food X/Y/distance behavior remain unchanged.
-- Deterministic parent/candidate continuation over **3,456 training steps** produced equal policy weights, PPO optimizer state, curiosity state, curriculum, RNG/cursor state, episodes, learner experience, rehearsal history, and other learning state. Only wall-clock throughput/profile fields differed, as expected from separate process timing.
-- Save schema remains **10**.
-
-The final ZIP is accompanied by a `.sha256` verification file.
+Final test/build/package results are appended after clean packaging.
+- Clean-unzip verification: the packaged repository was extracted to a fresh directory and `npm run check` again passed **106/106** with a successful static rebuild.

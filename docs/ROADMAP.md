@@ -15,3 +15,7 @@ Do not change learning yet. Accept v0.1.4.1.3 only after physical testing provid
 Then v0.1.4.2 should make **one targeted continual-learning change** supported by the evidence. Candidate directions remain deliberately unresolved until the audit distinguishes among policy detour learning, recurrent/temporal learning, reward/curriculum exposure, or angular-control conflict.
 
 After that targeted stability/navigation work is validated, the broader roadmap can proceed toward the planned **v0.1.5.0 World Model / Imagination Foundation**.
+
+## v0.1.4.2 — Detour Learning A/B
+
+Run the matched legacy-vs-record-progress reward experiment before committing a continual-learning stability fix. Accept or reject the candidate only after paired branch checkpoints show whether blocked-path reach/rotation-trap behavior improves without meaningful retained-skill regression. The preserved pre-audit learner remains the rollback point.

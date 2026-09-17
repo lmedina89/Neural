@@ -3,6 +3,7 @@ import { domainSeed, PRNG } from '../utils/prng.js';
 import { CURRICULUM, CurriculumManager } from '../sim/curriculum.js';
 import { World } from '../sim/world.js';
 import { evaluateFullRetentionSuite, evaluatePairedRetentionDelta } from '../evaluation/evaluator.js';
+import { runOcclusionAudit } from '../evaluation/occlusionSpinTelemetry.js';
 import { RecurrentActorCritic } from './model.js';
 import { CuriosityModule } from './curiosity.js';
 import { PPOTrainer } from './ppo.js';
@@ -63,8 +64,11 @@ export class TrainingSession {
     this.curiosityEpisodeHistory = [];
     this.curiosityBudgetResets = 0;
     this.curiosityRewardMode = 'reward';
+    this.approachRewardMode = 'legacy';
     this.curiosityAudit = defaultCuriosityAudit();
     this.auditRole = null;
+    this.detourAudit = defaultDetourAudit();
+    this.detourAuditRole = null;
     this.lastCuriosity = null;
     this.curiosityTrail = [];
     this.stabilityHistory = [];
@@ -97,7 +101,7 @@ export class TrainingSession {
     const cursor = this.envSeedCursor++;
     const stageIndex = this.chooseTrainingStage(cursor);
     const seed = domainSeed(`train:${this.seed}:stage:${stageIndex}`, cursor);
-    const env = new World(seed, CURRICULUM[stageIndex]);
+    const env = new World(seed, CURRICULUM[stageIndex], { approachRewardMode: this.approachRewardMode });
     this.envs[id] = env;
     this.obs[id] = env.observe();
     this.hidden[id] = this.model.zeroHidden();
@@ -109,7 +113,7 @@ export class TrainingSession {
     const cursor = this.envSeedCursor++;
     const stageIndex = this.chooseTrainingStage(cursor);
     const seed = domainSeed(`train:${this.seed}:stage:${stageIndex}`, cursor);
-    const env = new World(seed, CURRICULUM[stageIndex]);
+    const env = new World(seed, CURRICULUM[stageIndex], { approachRewardMode: this.approachRewardMode });
     this.envs[id] = env;
     this.obs[id] = env.observe();
     this.hidden[id] = this.model.zeroHidden();
@@ -119,7 +123,7 @@ export class TrainingSession {
 
   setCuriosityRewardMode(mode = 'reward') {
     if (!['reward', 'observe'].includes(mode)) throw new Error(`Unsupported curiosity reward mode: ${mode}`);
-    if (this.curiosityAudit?.active) throw new Error('Curiosity reward mode is locked by the active A/B audit');
+    if (this.curiosityAudit?.active || this.detourAudit?.active) throw new Error('Curiosity reward mode is locked by the active A/B audit');
     this.curiosityRewardMode = mode;
     return this.curiosityRewardMode;
   }
@@ -143,10 +147,14 @@ export class TrainingSession {
     let curiosityNoveltySum = 0;
     let curiositySampleCount = 0;
 
-    // During a controlled curiosity A/B audit, ordinary validation/promotion is
-    // deliberately suspended. Audit evaluations use their own fixed seed domain
-    // and are read-only, so neither branch can replace a Champion mid-experiment.
-    const auditActive = Boolean(this.curiosityAudit?.active);
+    // During either controlled A/B audit, ordinary validation/promotion is
+    // deliberately suspended. Audit evaluations use fixed seed domains and are
+    // read-only, so neither experimental branch can replace a Champion.
+    const auditKind = this.curiosityAudit?.active ? 'curiosity' : this.detourAudit?.active ? 'detour' : null;
+    const auditActive = Boolean(auditKind);
+    const auditOriginSteps = auditKind === 'curiosity'
+      ? Number(this.curiosityAudit?.originSteps) || 0
+      : auditKind === 'detour' ? Number(this.detourAudit?.originSteps) || 0 : 0;
     const preValidationStarted = performanceNow();
     const preValidation = !auditActive && this.totalSteps >= this.nextValidationStep && this.lastValidationStep !== this.totalSteps
       ? this.runValidation()
@@ -280,7 +288,7 @@ export class TrainingSession {
     // second-tested branch subtly different even when both began from identical
     // bytes, which would contaminate the ablation.
     const ppoTrainingStep = auditActive
-      ? Math.max(0, Number(this.curiosityAudit?.originSteps) || 0) + this.learnerExperienceSteps
+      ? Math.max(0, auditOriginSteps) + this.learnerExperienceSteps
       : this.totalSteps;
     const ppo = this.trainer.update(transitions, advantages, returns, { trainingStep: ppoTrainingStep });
     const ppoMs = performanceNow() - ppoStarted;
@@ -304,7 +312,9 @@ export class TrainingSession {
     const validation = postValidation || preValidation;
 
     const auditValidationStarted = performanceNow();
-    const auditEvaluation = this.maybeRunCuriosityAuditEvaluation();
+    const auditEvaluation = auditKind === 'curiosity'
+      ? this.maybeRunCuriosityAuditEvaluation()
+      : auditKind === 'detour' ? this.maybeRunDetourAuditEvaluation() : null;
     if (auditEvaluation) validationMs += performanceNow() - auditValidationStarted;
 
     const trainingStepsPerSec = transitions.length / (coreMs / 1000);
@@ -361,13 +371,19 @@ export class TrainingSession {
         episodeDiagnostics,
       },
       curiosityAudit: this.curiosityAuditSummary(),
+      approachRewardMode: this.approachRewardMode,
+      detourAudit: this.detourAuditSummary(),
       ...ppo,
     };
     this.metrics.push(metric);
     if (this.metrics.length > CONFIG.runtime.chartPoints) this.metrics.shift();
     this.recordStabilityPoint(metric);
-    const auditBranchComplete = Boolean(this.curiosityAudit?.active && this.auditRole && this.auditBranchProgress(this.auditRole) >= this.curiosityAudit.targetStepsPerBranch);
-    return { metric, completed, transitions: transitions.length, validation, curriculumEvent, auditEvaluation, auditBranchComplete };
+    const auditBranchComplete = auditKind === 'curiosity'
+      ? Boolean(this.auditRole && this.auditBranchProgress(this.auditRole) >= this.curiosityAudit.targetStepsPerBranch)
+      : auditKind === 'detour'
+        ? Boolean(this.detourAuditRole && this.detourAuditBranchProgress(this.detourAuditRole) >= this.detourAudit.targetStepsPerBranch)
+        : false;
+    return { metric, completed, transitions: transitions.length, validation, curriculumEvent, auditEvaluation, auditBranchComplete, auditKind };
   }
 
   recordStabilityPoint(metric = null) {
@@ -609,6 +625,7 @@ export class TrainingSession {
     checkpointInterval = CONFIG.curiosityAudit.checkpointInterval,
   } = {}) {
     if (this.curiosityAudit?.active) throw new Error('A curiosity A/B audit is already active');
+    if (this.detourAudit?.active) throw new Error('End the active detour-learning A/B audit before starting the curiosity audit');
     const target = Math.max(100_000, Number(targetStepsPerBranch) || CONFIG.curiosityAudit.targetStepsPerBranch);
     const interval = Math.max(50_000, Math.min(target, Number(checkpointInterval) || CONFIG.curiosityAudit.checkpointInterval));
 
@@ -650,6 +667,7 @@ export class TrainingSession {
       optimizer: cloneSerializable(origin.optimizer),
       curiosity: cloneSerializable(origin.curiosity),
       curiosityRewardMode: rewardMode,
+      approachRewardMode: origin.approachRewardMode || 'legacy',
       curiosityEpisodeHistory: [],
       curiosityBudgetResets: 0,
       auditRole: role,
@@ -681,6 +699,7 @@ export class TrainingSession {
     this.validationConfidenceHistory = [];
     this.validationReference = null;
     this.curiosityRewardMode = 'observe';
+    this.approachRewardMode = origin.approachRewardMode === 'record-progress' ? 'record-progress' : 'legacy';
     this.auditRole = 'control';
     this.curiosityEpisodeHistory = [];
     this.curiosityBudgetResets = 0;
@@ -792,6 +811,247 @@ export class TrainingSession {
     // the single-learner historical schedule strictly after the audit's global age.
     this.nextMilestoneStep = nextHistoricalMilestoneAfter(this.totalSteps);
     return this.curiosityAuditSummary();
+  }
+
+  detourAuditBranchProgress(role) {
+    if (!role) return 0;
+    if (this.detourAudit?.active && this.detourAuditRole === role) return Math.max(0, Number(this.learnerExperienceSteps) || 0);
+    const branch = this.detourAudit?.branches?.[role];
+    const branchId = branch?.lineageId;
+    if (branchId) {
+      const frozen = this.frozenLearners.find(x => x.id === branchId);
+      if (frozen) return Math.max(0, Number(frozen.learnerExperienceSteps) || 0);
+    }
+    return Math.max(0, Number(branch?.progress) || 0);
+  }
+
+  detourAuditSummary() {
+    const audit = this.detourAudit || defaultDetourAudit();
+    const controlProgress = this.detourAuditBranchProgress('control');
+    const detourProgress = this.detourAuditBranchProgress('detour');
+    const rows = Array.isArray(audit.results) ? audit.results : [];
+    const compactResults = rows.map(row => ({
+      role: row.role,
+      checkpointSteps: row.checkpointSteps,
+      experienceSteps: row.experienceSteps,
+      globalSteps: row.globalSteps,
+      balancedScore: row.validation?.balancedScore ?? null,
+      balancedCiLow: row.validation?.balancedCiLow ?? null,
+      balancedCiHigh: row.validation?.balancedCiHigh ?? null,
+      meanFood: row.validation?.meanFood ?? null,
+      survivalRate: row.validation?.survivalRate ?? null,
+      stageScores: row.validation?.stageResults?.map(x => x.skillScore) || [],
+      occlusion: cloneSerializable(row.occlusion || null),
+    }));
+    return {
+      active: Boolean(audit.active),
+      id: audit.id || null,
+      role: this.detourAuditRole,
+      rewardMode: this.approachRewardMode,
+      originSteps: audit.originSteps ?? null,
+      targetStepsPerBranch: audit.targetStepsPerBranch || CONFIG.detourAudit.targetStepsPerBranch,
+      checkpointInterval: audit.checkpointInterval || CONFIG.detourAudit.checkpointInterval,
+      controlProgress,
+      detourProgress,
+      controlLineageId: audit.branches?.control?.lineageId || null,
+      detourLineageId: audit.branches?.detour?.lineageId || null,
+      results: compactResults,
+      comparison: pairedDetourAuditComparison(compactResults),
+      completed: Boolean(audit.completed),
+    };
+  }
+
+  startDetourAudit({
+    targetStepsPerBranch = CONFIG.detourAudit.targetStepsPerBranch,
+    checkpointInterval = CONFIG.detourAudit.checkpointInterval,
+  } = {}) {
+    if (this.detourAudit?.active) throw new Error('A detour-learning A/B audit is already active');
+    if (this.curiosityAudit?.active) throw new Error('End the active curiosity A/B audit before starting the detour-learning audit');
+    const target = Math.max(100_000, Number(targetStepsPerBranch) || CONFIG.detourAudit.targetStepsPerBranch);
+    const interval = Math.max(50_000, Math.min(target, Number(checkpointInterval) || CONFIG.detourAudit.checkpointInterval));
+
+    const origin = this.freezeCurrentLearner('preserved-before-detour-ab-audit');
+    const auditId = `DETAUD-${this.totalSteps}-${this.lineageCounter + 1}`;
+    const preAutoCurriculum = this.autoCurriculum;
+    const preApproachRewardMode = this.approachRewardMode;
+
+    this.lineageCounter++;
+    const controlLineage = {
+      id: `L-${(this.seed >>> 0).toString(16)}-${this.lineageCounter}`,
+      startedAtSteps: this.totalSteps,
+      parent: { type: 'detour-audit-origin', auditId, lineageId: origin.id, sourceSteps: this.totalSteps },
+      reason: 'detour-ab-control-legacy-reward',
+    };
+    this.lineageCounter++;
+    const detourLineage = {
+      id: `L-${(this.seed >>> 0).toString(16)}-${this.lineageCounter}`,
+      startedAtSteps: this.totalSteps,
+      parent: { type: 'detour-audit-origin', auditId, lineageId: origin.id, sourceSteps: this.totalSteps },
+      reason: 'detour-ab-record-progress-reward',
+    };
+
+    const makeAuditFrozen = (lineage, role, approachRewardMode) => ({
+      id: lineage.id,
+      lineage: structuredLineage(lineage),
+      frozenAtSteps: this.totalSteps,
+      frozenAtEpisodes: this.totalEpisodes,
+      learnerExperienceSteps: 0,
+      reason: 'detour-ab-audit-seed',
+      curriculum: cloneSerializable(origin.curriculum),
+      envSeedCursor: origin.envSeedCursor,
+      actionRngState: origin.actionRngState,
+      rehearsalEpisodeHistory: [...(origin.rehearsalEpisodeHistory || [])],
+      episodeHistory: [],
+      model: cloneSerializable(origin.model),
+      optimizer: cloneSerializable(origin.optimizer),
+      curiosity: cloneSerializable(origin.curiosity),
+      curiosityRewardMode: origin.curiosityRewardMode || 'reward',
+      approachRewardMode,
+      curiosityEpisodeHistory: [],
+      curiosityBudgetResets: 0,
+      auditRole: null,
+      auditId: null,
+      detourAuditRole: role,
+      detourAuditId: auditId,
+      validationConfidenceHistory: [],
+      validationReference: null,
+    });
+
+    const detourBranch = makeAuditFrozen(detourLineage, 'detour', 'record-progress');
+    const existing = this.frozenLearners.findIndex(x => x.id === detourBranch.id);
+    if (existing >= 0) this.frozenLearners[existing] = detourBranch;
+    else this.frozenLearners.push(detourBranch);
+
+    this.model.restore(origin.model);
+    this.trainer.restore(origin.optimizer);
+    this.curiosity = new CuriosityModule(this.seed ^ 0xc0decafe ^ this.lineageCounter);
+    this.curiosity.restore(origin.curiosity);
+    this.curriculum.restore(origin.curriculum || {});
+    this.envSeedCursor = Number(origin.envSeedCursor) || 0;
+    if (Number.isFinite(Number(origin.actionRngState))) this.actionRng.state = Number(origin.actionRngState) >>> 0;
+    this.rehearsalEpisodeHistory = Array.isArray(origin.rehearsalEpisodeHistory)
+      ? origin.rehearsalEpisodeHistory.slice(-CONFIG.continual.recentMixWindow)
+      : [];
+    this.learnerLineage = controlLineage;
+    this.learnerExperienceSteps = 0;
+    this.episodeHistory = [];
+    this.validationConfidenceHistory = [];
+    this.validationReference = null;
+    this.curiosityRewardMode = origin.curiosityRewardMode || 'reward';
+    this.approachRewardMode = 'legacy';
+    this.auditRole = null;
+    this.detourAuditRole = 'control';
+    this.curiosityEpisodeHistory = [];
+    this.curiosityBudgetResets = 0;
+    this.lastCuriosity = null;
+    this.curiosityTrail = [];
+    this.autoCurriculum = false;
+    this.lineageHistory.push(structuredLineage(controlLineage), structuredLineage(detourLineage));
+    if (this.lineageHistory.length > 64) this.lineageHistory = this.lineageHistory.slice(-64);
+
+    const baselineValidation = evaluateFullRetentionSuite(this.model, {
+      episodesPerStage: CONFIG.detourAudit.episodesPerStage,
+      seedBase: CONFIG.detourAudit.seedBase,
+      deterministic: false,
+      protocolTag: 'detour-learning-ab-v1',
+    });
+    const baselineOcclusion = compactOcclusionAudit(runOcclusionAudit(this.model));
+    this.detourAudit = {
+      active: true,
+      completed: false,
+      id: auditId,
+      originLineageId: origin.id,
+      originSteps: this.totalSteps,
+      startedAtSteps: this.totalSteps,
+      targetStepsPerBranch: target,
+      checkpointInterval: interval,
+      seedBase: CONFIG.detourAudit.seedBase,
+      preAutoCurriculum,
+      preApproachRewardMode,
+      branches: {
+        control: { lineageId: controlLineage.id, nextCheckpointSteps: interval, complete: false, progress: 0 },
+        detour: { lineageId: detourLineage.id, nextCheckpointSteps: interval, complete: false, progress: 0 },
+      },
+      results: [{
+        role: 'origin',
+        checkpointSteps: 0,
+        experienceSteps: 0,
+        globalSteps: this.totalSteps,
+        validation: baselineValidation,
+        occlusion: baselineOcclusion,
+      }],
+    };
+
+    for (let i = 0; i < this.envs.length; i++) this.resetEnv(i);
+    return this.detourAuditSummary();
+  }
+
+  maybeRunDetourAuditEvaluation() {
+    const audit = this.detourAudit;
+    const role = this.detourAuditRole;
+    if (!audit?.active || !role || !audit.branches?.[role]) return null;
+    const branch = audit.branches[role];
+    const progress = Math.max(0, Number(this.learnerExperienceSteps) || 0);
+    const target = Math.max(1, Number(audit.targetStepsPerBranch) || CONFIG.detourAudit.targetStepsPerBranch);
+    const interval = Math.max(1, Number(audit.checkpointInterval) || CONFIG.detourAudit.checkpointInterval);
+    const next = Math.min(target, Math.max(interval, Number(branch.nextCheckpointSteps) || interval));
+    if (progress < next) return null;
+
+    const validation = evaluateFullRetentionSuite(this.model, {
+      episodesPerStage: CONFIG.detourAudit.episodesPerStage,
+      seedBase: audit.seedBase || CONFIG.detourAudit.seedBase,
+      deterministic: false,
+      protocolTag: 'detour-learning-ab-v1',
+    });
+    const occlusion = compactOcclusionAudit(runOcclusionAudit(this.model));
+    const record = {
+      role,
+      checkpointSteps: next,
+      experienceSteps: progress,
+      globalSteps: this.totalSteps,
+      validation,
+      occlusion,
+    };
+    audit.results.push(record);
+    if (audit.results.length > 32) audit.results = audit.results.slice(-32);
+    branch.progress = progress;
+    branch.lastCheckpointSteps = next;
+    branch.lastScore = validation.balancedScore;
+    branch.nextCheckpointSteps = next >= target ? target : Math.min(target, next + interval);
+    branch.complete = progress >= target;
+    if (audit.branches.control.complete && audit.branches.detour.complete) {
+      audit.completed = true;
+      audit.completedAtSteps = this.totalSteps;
+    }
+    return record;
+  }
+
+  switchDetourAuditBranch(role) {
+    if (!this.detourAudit?.active) throw new Error('No detour-learning A/B audit is active');
+    if (!['control', 'detour'].includes(role)) throw new Error(`Unknown detour audit branch: ${role}`);
+    if (this.detourAuditRole === role) return { unchanged: true, role, lineageId: this.learnerLineage?.id || null };
+    const lineageId = this.detourAudit.branches?.[role]?.lineageId;
+    if (!lineageId) throw new Error(`Detour audit branch ${role} is unavailable`);
+    const event = this.switchToFrozenLearner(lineageId);
+    this.autoCurriculum = false;
+    return { ...event, role };
+  }
+
+  endDetourAudit() {
+    if (!this.detourAudit?.active) return this.detourAuditSummary();
+    const audit = this.detourAudit;
+    if (this.detourAuditRole && audit.branches?.[this.detourAuditRole]) {
+      audit.branches[this.detourAuditRole].progress = Math.max(0, Number(this.learnerExperienceSteps) || 0);
+    }
+    audit.active = false;
+    audit.endedAtSteps = this.totalSteps;
+    this.autoCurriculum = audit.preAutoCurriculum !== false;
+    this.detourAuditRole = null;
+    // Intentionally keep the active branch's approach-reward mode. Ending the
+    // experiment is not an automatic winner selection or policy replacement.
+    this.nextValidationStep = this.totalSteps;
+    this.nextMilestoneStep = nextHistoricalMilestoneAfter(this.totalSteps);
+    return this.detourAuditSummary();
   }
 
   promotionGate() {
@@ -1277,10 +1537,13 @@ export class TrainingSession {
       optimizer: this.trainer.serialize(),
       curiosity: this.curiosity.serialize(),
       curiosityRewardMode: this.curiosityRewardMode,
+      approachRewardMode: this.approachRewardMode,
       curiosityEpisodeHistory: cloneSerializable(this.curiosityEpisodeHistory),
       curiosityBudgetResets: this.curiosityBudgetResets,
       auditRole: this.auditRole,
       auditId: this.curiosityAudit?.active ? this.curiosityAudit.id : null,
+      detourAuditRole: this.detourAuditRole,
+      detourAuditId: this.detourAudit?.active ? this.detourAudit.id : null,
       stabilityHistory: cloneSerializable(this.stabilityHistory),
       stabilityEvents: cloneSerializable(this.stabilityEvents),
       nextStabilityCaptureStep: this.nextStabilityCaptureStep,
@@ -1302,8 +1565,11 @@ export class TrainingSession {
       reason: x.reason || null,
       curriculumStage: x.curriculum?.stage ?? null,
       curiosityRewardMode: x.curiosityRewardMode || 'reward',
+      approachRewardMode: x.approachRewardMode || 'legacy',
       auditRole: x.auditRole || null,
       auditId: x.auditId || null,
+      detourAuditRole: x.detourAuditRole || null,
+      detourAuditId: x.detourAuditId || null,
     }));
   }
 
@@ -1321,7 +1587,7 @@ export class TrainingSession {
   }
 
   activateForkSource(source, parent, reason) {
-    if (this.curiosityAudit?.active) throw new Error('End the active curiosity A/B audit before creating a different learner fork');
+    if (this.curiosityAudit?.active || this.detourAudit?.active) throw new Error('End the active A/B audit before creating a different learner fork');
     if (!source?.model) throw new Error('Fork source has no model');
     const frozen = this.freezeCurrentLearner('preserved-before-fork');
     this.model.restore(source.model);
@@ -1394,9 +1660,15 @@ export class TrainingSession {
     if (this.curiosityAudit?.active && target.auditId !== this.curiosityAudit.id) {
       throw new Error('End the active curiosity A/B audit before switching to an unrelated learner branch');
     }
+    if (this.detourAudit?.active && target.detourAuditId !== this.detourAudit.id) {
+      throw new Error('End the active detour-learning A/B audit before switching to an unrelated learner branch');
+    }
     this.frozenLearners.splice(idx, 1);
     if (this.curiosityAudit?.active && this.auditRole && this.curiosityAudit.branches?.[this.auditRole]) {
       this.curiosityAudit.branches[this.auditRole].progress = Math.max(0, Number(this.learnerExperienceSteps) || 0);
+    }
+    if (this.detourAudit?.active && this.detourAuditRole && this.detourAudit.branches?.[this.detourAuditRole]) {
+      this.detourAudit.branches[this.detourAuditRole].progress = Math.max(0, Number(this.learnerExperienceSteps) || 0);
     }
     const preserved = this.freezeCurrentLearner('preserved-before-lineage-switch');
     this.model.restore(target.model);
@@ -1404,9 +1676,11 @@ export class TrainingSession {
     this.curiosity = new CuriosityModule(this.seed ^ 0xc0decafe ^ (this.lineageCounter + 1));
     if (target.curiosity) this.curiosity.restore(target.curiosity);
     this.curiosityRewardMode = ['reward', 'observe'].includes(target.curiosityRewardMode) ? target.curiosityRewardMode : 'reward';
+    this.approachRewardMode = target.approachRewardMode === 'record-progress' ? 'record-progress' : 'legacy';
     this.curiosityEpisodeHistory = Array.isArray(target.curiosityEpisodeHistory) ? cloneSerializable(target.curiosityEpisodeHistory).slice(-160) : [];
     this.curiosityBudgetResets = Math.max(0, Number(target.curiosityBudgetResets) || 0);
     this.auditRole = target.auditRole || null;
+    this.detourAuditRole = target.detourAuditRole || null;
     this.lastCuriosity = null;
     this.curiosityTrail = [];
     this.curriculum.restore(target.curriculum || {});
@@ -1427,13 +1701,13 @@ export class TrainingSession {
     this.validationReference = target.validationReference ? cloneSerializable(target.validationReference) : null;
     this.learnerLineage = structuredLineage(target.lineage) || this.learnerLineage;
     this.learnerExperienceSteps = Math.max(0, Number(target.learnerExperienceSteps) || 0);
-    if (!this.curiosityAudit?.active) this.resetBranchValidationState();
+    if (!this.curiosityAudit?.active && !this.detourAudit?.active) this.resetBranchValidationState();
     else this.autoCurriculum = false;
     for (let i = 0; i < this.envs.length; i++) this.resetEnv(i);
     const event = {
       atSteps: this.totalSteps,
       automatic: false,
-      type: this.curiosityAudit?.active ? 'curiosity-audit-switch' : 'manual-lineage-switch',
+      type: this.curiosityAudit?.active ? 'curiosity-audit-switch' : this.detourAudit?.active ? 'detour-audit-switch' : 'manual-lineage-switch',
       lineageId: this.learnerLineage?.id || lineageId,
       preservedLineageId: preserved.id,
     };
@@ -1448,7 +1722,7 @@ export class TrainingSession {
 
   snapshot() {
     return {
-      schema: 10,
+      schema: 11,
       seed: this.seed,
       totalSteps: this.totalSteps,
       totalEpisodes: this.totalEpisodes,
@@ -1459,10 +1733,13 @@ export class TrainingSession {
       optimizer: this.trainer.serialize(),
       curiosity: this.curiosity.serialize(),
       curiosityRewardMode: this.curiosityRewardMode,
+      approachRewardMode: this.approachRewardMode,
       curiosityEpisodeHistory: cloneSerializable(this.curiosityEpisodeHistory),
       curiosityBudgetResets: this.curiosityBudgetResets,
       curiosityAudit: cloneSerializable(this.curiosityAudit),
       auditRole: this.auditRole,
+      detourAudit: cloneSerializable(this.detourAudit),
+      detourAuditRole: this.detourAuditRole,
       autoCurriculum: this.autoCurriculum,
       episodeHistory: cloneSerializable(this.episodeHistory),
       metrics: this.metrics,
@@ -1502,7 +1779,7 @@ export class TrainingSession {
   }
 
   restore(data) {
-    if (!data || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10].includes(data.schema)) throw new Error('Unsupported checkpoint schema');
+    if (!data || ![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].includes(data.schema)) throw new Error('Unsupported checkpoint schema');
     this.seed = data.seed;
     this.actionRng = new PRNG(this.seed ^ 0xa5a5a5a5);
     this.hallOfFame = [];
@@ -1527,13 +1804,16 @@ export class TrainingSession {
     this.curiosity = new CuriosityModule(this.seed ^ 0xc0decafe);
     if (data.schema >= 7 && data.curiosity) this.curiosity.restore(data.curiosity);
     this.curiosityRewardMode = data.schema >= 8 && ['reward', 'observe'].includes(data.curiosityRewardMode) ? data.curiosityRewardMode : 'reward';
+    this.approachRewardMode = data.schema >= 11 && data.approachRewardMode === 'record-progress' ? 'record-progress' : 'legacy';
     this.curiosityEpisodeHistory = data.schema >= 8 && Array.isArray(data.curiosityEpisodeHistory)
       ? cloneSerializable(data.curiosityEpisodeHistory).slice(-160)
       : [];
     this.curiosityBudgetResets = data.schema >= 8 ? Math.max(0, Number(data.curiosityBudgetResets) || 0) : 0;
     this.curiosityAudit = data.schema >= 8 && data.curiosityAudit ? normalizeCuriosityAudit(data.curiosityAudit) : defaultCuriosityAudit();
     this.auditRole = data.schema >= 8 ? (data.auditRole || null) : null;
-    this.autoCurriculum = this.curiosityAudit.active ? false : (data.schema >= 8 && typeof data.autoCurriculum === 'boolean' ? data.autoCurriculum : this.autoCurriculum);
+    this.detourAudit = data.schema >= 11 && data.detourAudit ? normalizeDetourAudit(data.detourAudit) : defaultDetourAudit();
+    this.detourAuditRole = data.schema >= 11 ? (data.detourAuditRole || null) : null;
+    this.autoCurriculum = this.curiosityAudit.active || this.detourAudit.active ? false : (data.schema >= 8 && typeof data.autoCurriculum === 'boolean' ? data.autoCurriculum : this.autoCurriculum);
     this.lastCuriosity = null;
     this.curiosityTrail = [];
     this.curriculum.restore(data.curriculum || {});
@@ -1546,7 +1826,7 @@ export class TrainingSession {
       : nextHistoricalMilestoneAfter(this.totalSteps);
     if (data.schema === 1 && this.totalSteps > 0 && !this.milestones.has(this.totalSteps)) this.saveMilestone(this.totalSteps);
 
-    if (data.schema === 10 || data.schema === 9 || data.schema === 8 || data.schema === 7 || data.schema === 6 || data.schema === 5) {
+    if (data.schema === 11 || data.schema === 10 || data.schema === 9 || data.schema === 8 || data.schema === 7 || data.schema === 6 || data.schema === 5) {
       this.bestArchive = data.bestArchive && typeof data.bestArchive === 'object' ? data.bestArchive : {};
       this.bestBrain = this.bestArchive.balanced || data.bestBrain || null;
       this.validationHistory = Array.isArray(data.validationHistory) ? data.validationHistory.slice(-64) : [];
@@ -1749,6 +2029,109 @@ function normalizeCuriosityAudit(value) {
   };
   out.results = Array.isArray(value.results) ? cloneSerializable(value.results).slice(-32) : [];
   return out;
+}
+
+function defaultDetourAudit() {
+  return {
+    active: false,
+    completed: false,
+    id: null,
+    originLineageId: null,
+    originSteps: null,
+    startedAtSteps: null,
+    targetStepsPerBranch: CONFIG.detourAudit.targetStepsPerBranch,
+    checkpointInterval: CONFIG.detourAudit.checkpointInterval,
+    seedBase: CONFIG.detourAudit.seedBase,
+    preAutoCurriculum: true,
+    preApproachRewardMode: 'legacy',
+    branches: {
+      control: { lineageId: null, nextCheckpointSteps: CONFIG.detourAudit.checkpointInterval, complete: false, progress: 0 },
+      detour: { lineageId: null, nextCheckpointSteps: CONFIG.detourAudit.checkpointInterval, complete: false, progress: 0 },
+    },
+    results: [],
+  };
+}
+
+function normalizeDetourAudit(value) {
+  const base = defaultDetourAudit();
+  if (!value || typeof value !== 'object') return base;
+  const out = { ...base, ...cloneSerializable(value) };
+  out.active = Boolean(value.active);
+  out.completed = Boolean(value.completed);
+  out.targetStepsPerBranch = Math.max(100_000, Number(value.targetStepsPerBranch) || CONFIG.detourAudit.targetStepsPerBranch);
+  out.checkpointInterval = Math.max(50_000, Number(value.checkpointInterval) || CONFIG.detourAudit.checkpointInterval);
+  out.seedBase = value.seedBase || CONFIG.detourAudit.seedBase;
+  out.branches = {
+    control: { ...base.branches.control, ...(value.branches?.control || {}) },
+    detour: { ...base.branches.detour, ...(value.branches?.detour || {}) },
+  };
+  out.results = Array.isArray(value.results) ? cloneSerializable(value.results).slice(-32) : [];
+  return out;
+}
+
+function compactOcclusionAudit(audit) {
+  if (!audit) return null;
+  return {
+    protocol: audit.protocol,
+    cases: (audit.cases || []).map(row => ({
+      caseName: row.caseName,
+      caseLabel: row.caseLabel,
+      initialLosBlocked: Boolean(row.initialLosBlocked),
+      initialPathBlocked: Boolean(row.initialPathBlocked),
+      reachRate: Number(row.reachRate) || 0,
+      rotationTrapRate: Number(row.rotationTrapRate) || 0,
+      pathClearRate: Number(row.pathClearRate) || 0,
+      successfulDetourRate: Number(row.successfulDetourRate) || 0,
+      temporaryRetreatRate: Number(row.temporaryRetreatRate) || 0,
+      meanReachSteps: Number(row.meanReachSteps) || 0,
+      meanPathClearStep: Number(row.meanPathClearStep) || 0,
+      meanTotalRotations: Number(row.meanTotalRotations) || 0,
+      meanTurnReversals: Number(row.meanTurnReversals) || 0,
+      meanAwayThrustRate: Number(row.meanAwayThrustRate) || 0,
+      meanWallHits: Number(row.meanWallHits) || 0,
+    })),
+  };
+}
+
+function detourOcclusionAggregate(occlusion) {
+  const blocked = (occlusion?.cases || []).filter(x => x.initialPathBlocked);
+  if (!blocked.length) return { reachRate: 0, detourRate: 0, trapRate: 0, pathClearRate: 0 };
+  const mean = key => blocked.reduce((s, x) => s + (Number(x[key]) || 0), 0) / blocked.length;
+  return {
+    reachRate: mean('reachRate'),
+    detourRate: mean('successfulDetourRate'),
+    trapRate: mean('rotationTrapRate'),
+    pathClearRate: mean('pathClearRate'),
+  };
+}
+
+function pairedDetourAuditComparison(results) {
+  const rows = Array.isArray(results) ? results : [];
+  const controls = new Map(rows.filter(x => x.role === 'control').map(x => [Number(x.checkpointSteps) || 0, x]));
+  const detours = new Map(rows.filter(x => x.role === 'detour').map(x => [Number(x.checkpointSteps) || 0, x]));
+  const checkpoints = [...controls.keys()].filter(x => detours.has(x)).sort((a, b) => a - b);
+  if (!checkpoints.length) return { checkpointSteps: null, interpretation: 'awaiting-paired-result' };
+  const checkpointSteps = checkpoints.at(-1);
+  const control = controls.get(checkpointSteps);
+  const detour = detours.get(checkpointSteps);
+  const controlOcc = detourOcclusionAggregate(control?.occlusion);
+  const detourOcc = detourOcclusionAggregate(detour?.occlusion);
+  return {
+    checkpointSteps,
+    controlBalanced: Number(control?.balancedScore),
+    detourBalanced: Number(detour?.balancedScore),
+    balancedDelta: Number(detour?.balancedScore) - Number(control?.balancedScore),
+    controlBlockedReach: controlOcc.reachRate,
+    detourBlockedReach: detourOcc.reachRate,
+    blockedReachDelta: detourOcc.reachRate - controlOcc.reachRate,
+    controlDetourRate: controlOcc.detourRate,
+    detourDetourRate: detourOcc.detourRate,
+    detourRateDelta: detourOcc.detourRate - controlOcc.detourRate,
+    controlTrapRate: controlOcc.trapRate,
+    detourTrapRate: detourOcc.trapRate,
+    trapRateDelta: detourOcc.trapRate - controlOcc.trapRate,
+    interpretation: 'paired-measurement-only',
+  };
 }
 
 function pairedAuditComparison(results) {

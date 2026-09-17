@@ -1,5 +1,5 @@
-export const VERSION = '0.1.4.1.3';
-export const BUILD_MARKER = 'OCCCHAR-01413';
+export const VERSION = '0.1.4.2';
+export const BUILD_MARKER = 'DETOURAB-0142';
 
 export const CONFIG = Object.freeze({
   world: {
@@ -71,6 +71,15 @@ export const CONFIG = Object.freeze({
     // The CONTROL branch keeps the predictor learning/observing but applies zero
     // intrinsic reward to PPO. The CURIOSITY branch preserves v0.1.3 behavior.
     seedBase: 'heldout:curiosity-ablation:v1',
+    episodesPerStage: 8,
+    checkpointInterval: 500_000,
+    targetStepsPerBranch: 2_000_000,
+  },
+  detourAudit: {
+    // Controlled reward A/B. Both descendants begin from identical learner,
+    // optimizer, curiosity predictor, curriculum, environment cursor and action
+    // RNG bytes. Only the dense approach-reward calculation differs.
+    seedBase: 'heldout:detour-learning-ab:v1',
     episodesPerStage: 8,
     checkpointInterval: 500_000,
     targetStepsPerBranch: 2_000_000,
