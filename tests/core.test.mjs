@@ -12,11 +12,12 @@ import { computeGAE } from '../src/ai/rollout.js';
 import { TrainingSession, nextHistoricalMilestoneAfter, assessSkillRetention } from '../src/ai/session.js';
 import { evaluateCurriculumSuite, evaluateFullRetentionSuite, evaluateHeldoutGeneralizationSuite, evaluatePairedRetentionDelta, generalizationDiagnostic } from '../src/evaluation/evaluator.js';
 import { ORIENTATION_AUDIT, runOrientationAudit } from '../src/evaluation/orientationAudit.js';
+import { LiveSpinRecorder, OCCLUSION_AUDIT, SPIN_TELEMETRY, foodVisibilityDiagnostic, runOcclusionAudit } from '../src/evaluation/occlusionSpinTelemetry.js';
 import { projectHiddenState } from '../src/visualization/memoryRenderer.js';
 import { buildHistoryScene } from '../src/visualization/historyRenderer.js';
 import { RollingStepRate, formatRollingRate } from '../src/app/runtimeDiagnostics.js';
 
-test('release identity is v0.1.4.1.1 Rear-Target & Rotation Audit',()=>{assert.equal(VERSION,'0.1.4.1.1');assert.equal(BUILD_MARKER,'ROTAUD-01411')});
+test('release identity is v0.1.4.1.2 Live Occlusion & Spin-Cause Telemetry',()=>{assert.equal(VERSION,'0.1.4.1.2');assert.equal(BUILD_MARKER,'OCCSPIN-01412')});
 test('PRNG is repeatable',()=>{const a=new PRNG(123),b=new PRNG(123);for(let i=0;i<100;i++)assert.equal(a.nextUint(),b.nextUint())});
 test('training, validation, comparison, curiosity-audit and final-holdout seed domains are separated',()=>{const domains=['train',CONFIG.validation.seedBase,CONFIG.validationConfidence.seedBase,CONFIG.generalization.compareSeedBase,CONFIG.curiosityAudit.seedBase,CONFIG.generalization.seedBase];const seeds=domains.map(x=>domainSeed(x,0));assert.equal(new Set(seeds).size,seeds.length)});
 test('world generation is deterministic',()=>{const a=new World(77,CURRICULUM[2]),b=new World(77,CURRICULUM[2]);assert.deepEqual(a.food,b.food);assert.deepEqual(a.hazards,b.hazards);assert.deepEqual(a.walls,b.walls);assert.deepEqual(Array.from(a.observe()),Array.from(b.observe()))});
@@ -108,6 +109,59 @@ test('rear-target audit UI is explicit, observational and wired without save-sch
   assert.match(main,/Training remains paused; no learning or save state changed/);
   assert.match(sessionSrc,/schema: 10/);
 });
+
+test('line-of-sight diagnostic distinguishes open, clearance-only and visually occluded paths without changing observations',()=>{
+  const make=(wall)=>{const w=new World(1201,{id:99,name:'LOS probe',foods:1,hazards:0,walls:0});w.agent={x:.24,y:.5,vx:0,vy:0,angle:0,omega:0,energy:1};w.food=[{x:.76,y:.5,r:CONFIG.world.foodRadius}];w.hazards=[];w.walls=wall?[wall]:[];w.prevFoodDist=w.nearestFoodDistance();return w};
+  const open=make(null);const clearance=make({x:.47,y:.52,w:.08,h:.18});const blocked=make({x:.47,y:.44,w:.08,h:.12});
+  const oo=Array.from(open.observe()),co=Array.from(clearance.observe()),bo=Array.from(blocked.observe());
+  const od=foodVisibilityDiagnostic(open),cd=foodVisibilityDiagnostic(clearance),bd=foodVisibilityDiagnostic(blocked);
+  assert.equal(od.losBlocked,false);assert.equal(od.pathBlocked,false);
+  assert.equal(cd.losBlocked,false);assert.equal(cd.pathBlocked,true);
+  assert.equal(bd.losBlocked,true);assert.equal(bd.pathBlocked,true);
+  assert.equal(oo.length,10);assert.equal(co.length,10);assert.equal(bo.length,10);
+  assert.equal(oo[0],co[0]);assert.equal(oo[0],bo[0]);assert.equal(oo[1],co[1]);assert.equal(oo[1],bo[1]);assert.equal(oo[2],co[2]);assert.equal(oo[2],bo[2]);
+});
+
+test('controlled occlusion audit is deterministic and read-only',()=>{
+  const s=new TrainingSession({seed:1202,envCount:2,autoCurriculum:false});s.trainRollout(8);
+  const before=JSON.stringify(s.snapshot());
+  const opts={trialsPerCase:3};
+  const a=runOcclusionAudit(s.model,opts),b=runOcclusionAudit(s.model,opts);
+  assert.deepEqual(a,b);assert.equal(JSON.stringify(s.snapshot()),before);
+  assert.equal(a.cases.length,3);assert.equal(a.trials.length,9);
+  const open=a.cases.find(x=>x.caseName==='open'),clearance=a.cases.find(x=>x.caseName==='clearance'),blocked=a.cases.find(x=>x.caseName==='occluded');
+  assert.equal(open.initialLosBlocked,false);assert.equal(open.initialPathBlocked,false);
+  assert.equal(clearance.initialLosBlocked,false);assert.equal(clearance.initialPathBlocked,true);
+  assert.equal(blocked.initialLosBlocked,true);assert.equal(blocked.initialPathBlocked,true);
+  for(const row of a.cases){for(const k of ['reachRate','spinRate'])assert.ok(row[k]>=0&&row[k]<=1);for(const k of ['meanTotalRotations','meanMaxWindowRotations','meanDistanceProgress','meanWallHits'])assert.ok(Number.isFinite(row[k]))}
+  assert.equal(a.settings.trialsPerCase,3);assert.equal(OCCLUSION_AUDIT.cases.length,3);
+});
+
+test('live spin recorder detects sustained poor-progress rotation and classifies blocked wall conflict',()=>{
+  const recorder=new LiveSpinRecorder({spinWindowSteps:20,historySteps:28,postCaptureSteps:2,spinRotationThreshold:.35,poorProgressDistance:.04,eventCooldownSteps:100});
+  const world=new World(1203,{id:99,name:'telemetry probe',foods:1,hazards:0,walls:0});
+  world.agent={x:.24,y:.5,vx:0,vy:0,angle:0,omega:0,energy:1};world.food=[{x:.76,y:.5,r:CONFIG.world.foodRadius}];world.hazards=[];world.walls=[{x:.47,y:.44,w:.08,h:.12}];world.prevFoodDist=world.nearestFoodDistance();
+  let completed=null;
+  for(let i=0;i<28;i++){
+    const obs=world.observe();
+    const snapshot={obs,probs:new Float64Array([0,0,0,0,1,0,0]),value:0,h:new Float64Array(CONFIG.model.hiddenSize)};
+    const sample=recorder.beginSample(world,snapshot,4);
+    world.agent.angle += .14; world.agent.omega=.06; world.stepCount++;
+    completed=recorder.endSample(sample,world,{reward:0,done:false})||completed;
+  }
+  assert.ok(completed);assert.equal(completed.cause,'wall/food-conflict');assert.ok(completed.blockedRate>=.5);assert.equal(recorder.summary().events,1);assert.equal(recorder.summary().blockedAtOnsetRate,1);
+});
+
+test('occlusion telemetry UI is session-only and wired without save-schema changes',async()=>{
+  const html=await readFile(new URL('../index.html',import.meta.url),'utf8');
+  const main=await readFile(new URL('../src/app/main.js',import.meta.url),'utf8');
+  const sessionSrc=await readFile(new URL('../src/ai/session.js',import.meta.url),'utf8');
+  for(const id of ['spinCompactSummary','spinRecorderStatusVal','spinEventCountVal','spinBlockedRateVal','spinLatestCauseVal','spinResultsText','spinOcclusionRunBtn','spinClearBtn','spinOcclusionResultsText'])assert.match(html,new RegExp(`id="${id}"`));
+  assert.match(html,/LIVE OCCLUSION \/ SPIN TELEMETRY/);
+  assert.match(main,/liveSpinRecorder\.beginSample/);assert.match(main,/runOcclusionConflictAudit/);assert.match(main,/foodVisibilityDiagnostic\(viewWorld\)/);
+  assert.match(sessionSrc,/schema: 10/);assert.equal(SPIN_TELEMETRY.protocol,'live-occlusion-spin:v1');
+});
+
 test('GAE returns finite aligned arrays',()=>{const t=[{env:0,reward:1,value:.2,done:false},{env:0,reward:.5,value:.3,done:true}];const g=computeGAE(t,new Map([[0,0]]));assert.equal(g.advantages.length,2);assert.ok([...g.advantages,...g.returns].every(Number.isFinite))});
 test('model checkpoint roundtrip is exact',()=>{const m=new RecurrentActorCritic(9),n=new RecurrentActorCritic(10);n.restore(m.serialize());for(const k of Object.keys(m.params))assert.deepEqual(Array.from(m.params[k]),Array.from(n.params[k]))});
 test('training changes parameters without non-finite values',()=>{const s=new TrainingSession({seed:99,envCount:2,autoCurriculum:false});const before=Array.from(s.model.params.wp);s.trainRollout(8);const after=Array.from(s.model.params.wp);assert.notDeepEqual(after,before);for(const arr of Object.values(s.model.params))for(const x of arr)assert.ok(Number.isFinite(x))});
@@ -163,7 +217,7 @@ test('schema-2 save migration preserves old protected best and schedules immedia
 test('schema-1 long-run migration snapshots exact loaded brain and does not backfill fake milestones',()=>{const a=new TrainingSession({seed:44,envCount:2,autoCurriculum:false});const snap=a.snapshot();const steps=2_122_848;const legacy={schema:1,seed:snap.seed,totalSteps:steps,totalEpisodes:3000,envSeedCursor:snap.envSeedCursor,curriculum:{stage:2,history:[]},model:snap.model,optimizer:snap.optimizer,metrics:[],milestones:snap.milestones};const b=new TrainingSession({seed:45,envCount:2,autoCurriculum:false});b.restore(legacy);assert.equal(b.nextMilestoneStep,2_250_000);assert.ok(b.milestones.has(steps));assert.equal(b.milestones.has(1_250_000),false);assert.equal(b.nextValidationStep,b.totalSteps)});
 
 test('reward is decomposed into finite named components',()=>{const w=new World(12345,CURRICULUM[1]);const r=w.step(1);const parts=r.info.rewardParts;for(const k of ['survival','energy','wall','food','hazard','approach','death'])assert.ok(Number.isFinite(parts[k]),k)});
-test('v0.1.4.0.4 UI preserves Hall, branching, performance, lineage, rehearsal and curiosity-audit diagnostics',async()=>{const html=await readFile(new URL('../index.html',import.meta.url),'utf8');for(const id of ['brainSource','hallBrainOptions','bestOption','overallOption','foragerOption','survivorOption','efficiencyOption','pinChampionBtn','restoreBestBtn','branchSelect','switchBranchBtn','researchLineageVal','policyOriginVal','hallVal','branchesVal','hallList','skillRetention','lrVal','klVal','epochsVal','retentionAlert','lineageVal','rehearsalVal','promotionVal','simSpeedVal','ppoMsVal','fpsVal','uiMsVal','validationMsVal','storageMsVal','curiosityInfluenceVal','curiosityAppliedVal','curiosityShareVal','curiosityResetsVal','curiosityBudgetUseVal','curiosityExhaustVal','curiosityModeSelect','startCuriosityAuditBtn','switchCuriosityAuditBtn','endCuriosityAuditBtn','curiosityAuditResults'])assert.match(html,new RegExp(`id="${id}"`));assert.match(html,/v0\.1\.4\.1\.1/);assert.match(html,/Fork New Learner/);assert.match(html,/Hall of Fame/);assert.match(html,/Adaptive/);assert.match(html,/observational only/);assert.match(html,/final holdout only diagnoses/)});
+test('v0.1.4.0.4 UI preserves Hall, branching, performance, lineage, rehearsal and curiosity-audit diagnostics',async()=>{const html=await readFile(new URL('../index.html',import.meta.url),'utf8');for(const id of ['brainSource','hallBrainOptions','bestOption','overallOption','foragerOption','survivorOption','efficiencyOption','pinChampionBtn','restoreBestBtn','branchSelect','switchBranchBtn','researchLineageVal','policyOriginVal','hallVal','branchesVal','hallList','skillRetention','lrVal','klVal','epochsVal','retentionAlert','lineageVal','rehearsalVal','promotionVal','simSpeedVal','ppoMsVal','fpsVal','uiMsVal','validationMsVal','storageMsVal','curiosityInfluenceVal','curiosityAppliedVal','curiosityShareVal','curiosityResetsVal','curiosityBudgetUseVal','curiosityExhaustVal','curiosityModeSelect','startCuriosityAuditBtn','switchCuriosityAuditBtn','endCuriosityAuditBtn','curiosityAuditResults'])assert.match(html,new RegExp(`id="${id}"`));assert.match(html,/v0\.1\.4\.1\.2/);assert.match(html,/Fork New Learner/);assert.match(html,/Hall of Fame/);assert.match(html,/Adaptive/);assert.match(html,/observational only/);assert.match(html,/final holdout only diagnoses/)});
 
 test('skill-regression streak stays observational until paired confidence confirmation',()=>{const stages=[{stage:0,name:'Motor Nursery',skillScore:.33,skillCiLow:.25,skillCiHigh:.41}];const best=[{stage:0,name:'Motor Nursery',score:.74,ciLow:.66,ciHigh:.82,atSteps:1000},null,null,null];const a=assessSkillRetention(stages,best,[0,0,0,0]);assert.equal(a.alerts.length,1);assert.equal(a.alerts[0].severity,'catastrophic');assert.equal(a.alerts[0].confirmed,false);const b=assessSkillRetention(stages,best,a.streaks);assert.equal(b.alerts[0].confirmed,false);assert.equal(b.alerts[0].repeatObserved,true);assert.equal(b.alerts[0].streak,2)});
 test('final held-out generalization suite is all-skills and isolated from validation',()=>{const m=new RecurrentActorCritic(77);const r=evaluateHeldoutGeneralizationSuite(m,{episodesPerStage:2,seedBase:'heldout:final:test'});assert.equal(r.stageResults.length,CURRICULUM.length);assert.equal(r.episodes,2*CURRICULUM.length);assert.match(r.protocol,/heldout-generalization-v2/);assert.doesNotMatch(r.protocol,/validation:v3/)});

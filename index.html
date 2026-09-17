@@ -14,7 +14,7 @@
         <div class="eyebrow">MICROMIND • LEARNING LABORATORY</div>
         <h1>Watch a tiny brain actually learn.</h1>
       </div>
-      <div class="build" id="buildTag">v0.1.4.1.1 • ROTAUD-01411</div>
+      <div class="build" id="buildTag">v0.1.4.1.2 • OCCSPIN-01412</div>
     </header>
 
     <section class="controls" aria-label="Main controls">
@@ -270,6 +270,23 @@
       </div>
     </details>
 
+    <details class="panel spinTelemetryPanel collapsiblePanel" data-observatory-view="research" hidden aria-label="Live occlusion and spin telemetry">
+      <summary class="panelSummary"><strong>LIVE OCCLUSION / SPIN TELEMETRY</strong><span id="spinCompactSummary">STANDBY • 0 captured</span></summary>
+      <div class="collapsibleBody">
+        <div class="stabilityNotice">Read-only recorder for the behavior you observed in normal OBSERVE worlds. It computes diagnostic line-of-sight/path obstruction outside the neural observation, watches the real stochastic policy, and captures sustained rotation with poor food progress. Nothing here is fed back into the brain.</div>
+        <div class="orientationControls"><button id="spinOcclusionRunBtn">Run Controlled Occlusion Audit</button><button id="spinClearBtn">Clear Live Events</button><span>Live recorder arms automatically in OBSERVE • session-only • no save-schema change</span></div>
+        <div class="stabilityGrid orientationSummaryGrid">
+          <div><span>recorder</span><b id="spinRecorderStatusVal">STANDBY</b></div>
+          <div><span>captured events</span><b id="spinEventCountVal">0</b></div>
+          <div><span>LOS blocked at onset</span><b id="spinBlockedRateVal">—</b></div>
+          <div><span>latest context</span><b id="spinLatestCauseVal">—</b></div>
+        </div>
+        <div class="spinResults" id="spinResultsText">No sustained spin event captured yet. Switch to OBSERVE and let the loaded brain run normally.</div>
+        <div class="spinAuditSubhead">CONTROLLED GEOMETRY CHECK</div>
+        <div class="spinResults" id="spinOcclusionResultsText">Not run yet. OPEN, PATH-BLOCKED/LOS-CLEAR, and LOS-BLOCKED worlds use the same start pose, food position, zero recurrent state, and paired stochastic action seeds.</div>
+      </div>
+    </details>
+
     <details class="panel curiosityPanel collapsiblePanel" data-observatory-view="predict" open hidden aria-label="Curiosity and prediction model">
       <summary class="panelSummary"><strong>CURIOSITY / PREDICTION</strong><span id="curiosityCompactSummary">learned forward model • evaluation curiosity OFF</span></summary>
       <div class="collapsibleBody">
@@ -329,7 +346,7 @@
       <div class="collapsibleBody"><div id="resultsText" class="resultsText">No evaluation run yet.</div></div>
     </details>
 
-    <footer>MicroMind v0.1.4.1.1 adds a read-only rear-target and rotation audit on top of v0.1.4.1 validation confidence. Learning math, curiosity, curriculum, observations, world physics, save schema, and protected Champion behavior remain unchanged.</footer>
+    <footer>MicroMind v0.1.4.1.2 adds session-only live occlusion/spin telemetry and a paired controlled geometry audit. Learning math, curiosity, curriculum, policy observations, world physics, save schema, and protected Champion behavior remain unchanged.</footer>
   </main>
   <script type="module" src="./src/app/main.js"></script>
 </body>

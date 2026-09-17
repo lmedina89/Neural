@@ -3,6 +3,7 @@ import { TrainingSession } from '../ai/session.js';
 import { RecurrentActorCritic } from '../ai/model.js';
 import { evaluateFullRetentionSuite, evaluateHeldoutGeneralizationSuite, generalizationDiagnostic } from '../evaluation/evaluator.js';
 import { ORIENTATION_AUDIT, runOrientationAudit } from '../evaluation/orientationAudit.js';
+import { LiveSpinRecorder, OCCLUSION_AUDIT, SPIN_TELEMETRY, foodVisibilityDiagnostic, runOcclusionAudit } from '../evaluation/occlusionSpinTelemetry.js';
 import { CURRICULUM } from '../sim/curriculum.js';
 import { World } from '../sim/world.js';
 import { domainSeed, PRNG } from '../utils/prng.js';
@@ -50,6 +51,8 @@ const el = {
   confidenceSample: $('confidenceSampleVal'), confidenceBalanced: $('confidenceBalancedVal'), confidenceEvidence: $('confidenceEvidenceText'), confidenceHistory: $('confidenceHistoryText'),
   orientationCompactSummary: $('orientationCompactSummary'), orientationRun: $('orientationRunBtn'), orientationSource: $('orientationSourceVal'),
   orientationProtocol: $('orientationProtocolVal'), orientationRear: $('orientationRearVal'), orientationSpin: $('orientationSpinVal'), orientationResults: $('orientationResultsText'),
+  spinCompactSummary: $('spinCompactSummary'), spinRecorderStatus: $('spinRecorderStatusVal'), spinEventCount: $('spinEventCountVal'), spinBlockedRate: $('spinBlockedRateVal'), spinLatestCause: $('spinLatestCauseVal'),
+  spinResults: $('spinResultsText'), spinClear: $('spinClearBtn'), spinOcclusionRun: $('spinOcclusionRunBtn'), spinOcclusionResults: $('spinOcclusionResultsText'),
   observatoryNav: $('observatoryNav'), observatoryViewNote: $('observatoryViewNote'),
   predictWorld: $('predictWorldCanvas'), predictWorldMeta: $('predictWorldMeta'),
   memoryCanvas: $('memoryCanvas'), memoryMeta: $('memoryMeta'), memoryInspect: $('memoryInspect'),
@@ -63,6 +66,8 @@ let mode = 'LEARN', paused = false, trainBusy = false, observeAccum = 0, lastFra
 let lastVisualRender = 0, lastCuriosityRender = 0, lastMemoryRender = 0, lastHistoryRender = 0, lastMemoryCaptureCheck = 0, lastUiPaint = 0, lastUiDurationMs = 0, lastStorageDurationMs = 0, browserFps = 60, rafFrames = 0, rafWindowStart = performance.now(), adaptiveDelay = 8, controlSignature = '';
 let activeObservatoryView = 'live';
 let lastOrientationAudit = null;
+let lastOcclusionAudit = null;
+const liveSpinRecorder = new LiveSpinRecorder();
 const trainRate = new RollingStepRate({ windowsMs: [5000, 30000], sampleIntervalMs: 120 });
 let memoryPoints = [], memoryLastSampleAt = 0, memoryLastStep = -1, memoryLastSourceKey = '', memoryLineageId = null, memoryLastEpisode = -1;
 const MEMORY_MAX_POINTS = 320;
@@ -315,8 +320,11 @@ function resetViewState() {
   viewHidden = model.zeroHidden();
   lastSnapshot = model.forward(viewObs, viewHidden);
   observeAccum = 0;
+  liveSpinRecorder.beginEpisode();
 }
 function setMode(next) {
+  const previousMode = mode;
+  if (next === 'OBSERVE' && previousMode !== 'OBSERVE') liveSpinRecorder.reset();
   mode = next;
   resetTrainRateMeter();
   paused = false;
@@ -329,6 +337,7 @@ function setMode(next) {
   if (next === 'PROBE') el.probe.classList.add('active');
   if (next !== 'LEARN') resetViewState();
   el.viewBrainBadge.textContent = selectedSourceLabel();
+  updateSpinTelemetryUI();
   const curiosityModeText = session.curiosityRewardMode === 'reward' ? 'curiosity reward ON' : 'curiosity observe-only (reward 0)';
   setStatus(next === 'LEARN'
     ? `Autonomous Learner active. PPO trains across current challenges plus rehearsal; ${curiosityModeText}. Champions remain frozen observers.`
@@ -455,11 +464,18 @@ function stepObserved() {
   const model = selectedViewModel();
   if (viewWorld.done) resetViewState();
   const act = model.act(viewObs, viewHidden, viewRng, false);
+  const telemetrySample = liveSpinRecorder.beginSample(viewWorld, act.snapshot, act.action);
   const r = viewWorld.step(act.action);
+  const capturedSpin = liveSpinRecorder.endSample(telemetrySample, viewWorld, r);
   viewObs = r.obs;
   viewHidden = act.hidden;
   lastSnapshot = act.snapshot;
-  if (r.done) setStatus(`Episode complete (${selectedSourceLabel()}): food ${r.info.food}, return ${r.info.totalReward.toFixed(2)}.`);
+  if (capturedSpin) {
+    updateSpinTelemetryUI();
+    setStatus(`Captured live spin event #${capturedSpin.id}: ${capturedSpin.cause} • LOS blocked ${(capturedSpin.blockedRate * 100).toFixed(0)}% of trigger window • ${capturedSpin.recovery}. Recorder remains read-only.`);
+  } else if (r.done) {
+    setStatus(`Episode complete (${selectedSourceLabel()}): food ${r.info.food}, return ${r.info.totalReward.toFixed(2)}.`);
+  }
 }
 function updateProbe() {
   const model = selectedViewModel();
@@ -591,7 +607,9 @@ function updateDecision() {
   el.rewardParts.textContent = `external  food ${(rp.food || 0).toFixed(3)}  approach ${(rp.approach || 0).toFixed(3)}  energy ${(rp.energy || 0).toFixed(3)}  wall ${(rp.wall || 0).toFixed(3)}  hazard ${(rp.hazard || 0).toFixed(3)}  death ${(rp.death || 0).toFixed(3)}  | curiosity${curiositySuffix}`;
   el.energy.value = viewWorld.agent.energy;
   el.energyText.textContent = `${Math.round(viewWorld.agent.energy * 100)}%`;
-  el.worldMeta.textContent = `seed ${viewWorld.seed}`;
+  const visibility = foodVisibilityDiagnostic(viewWorld);
+  const losLabel = visibility.losBlocked ? 'diag LOS BLOCKED' : visibility.pathBlocked ? 'diag PATH BLOCKED' : 'diag DIRECT';
+  el.worldMeta.textContent = `seed ${viewWorld.seed} • ${losLabel}`;
   el.viewBrainBadge.textContent = selectedSourceLabel();
 }
 
@@ -740,6 +758,7 @@ function updateUI() {
     el.orientationSpin.textContent = '—';
     el.orientationCompactSummary.textContent = 'rear-target turn control • observational';
   }
+  updateSpinTelemetryUI();
 
   const hall = session.hallOfFameSummary();
   const branches = session.frozenLearnerSummary();
@@ -960,6 +979,79 @@ function suiteText(name, r) {
   const skillLines = r.stageResults.map(x => `  ${x.name}: ${pct(x.skillScore)} [${pct(x.skillCiLow)}–${pct(x.skillCiHigh)}]`).join('\n');
   return `${name}\nprotocol: ${r.protocol}\nepisodes: ${r.episodes} (${r.episodesPerStage}/skill)\ngeneralization score: ${pct(r.balancedScore)} [${pct(r.balancedCiLow)}–${pct(r.balancedCiHigh)}]\nmean return: ${r.meanReturn.toFixed(3)}\nmean food: ${r.meanFood.toFixed(3)}\nsurvival: ${(r.survivalRate * 100).toFixed(1)}%\nmean energy: ${r.meanEnergy.toFixed(3)}\nmean steps: ${r.meanSteps.toFixed(1)}\nskills:\n${skillLines}`;
 }
+function spinEventTableHtml(events) {
+  if (!events.length) return '<div class="spinEmpty">No sustained spin event captured yet. Put MicroMind in OBSERVE and let it run normally; the recorder only watches and never feeds line-of-sight information back to the policy.</div>';
+  const rows = [...events].reverse().map(e => `<tr><td>#${e.id}</td><td>${e.seed}</td><td>${e.stageName}</td><td>${e.triggerStep}</td><td>${e.cause}</td><td>${pct(e.blockedRate)}</td><td>${pct(e.forwardConeRate)}</td><td>${e.onsetBearingDeg.toFixed(0)}°</td><td>${e.onsetOmegaFraction.toFixed(2)}</td><td>${e.triggerRotations.toFixed(2)}</td><td>${e.triggerProgress.toFixed(3)}</td><td>${e.recovery}</td></tr>`).join('');
+  return `<div class="spinTableWrap"><table class="resultsTable spinTable"><thead><tr><th>event</th><th>seed</th><th>stage</th><th>step</th><th>classified context</th><th>LOS blocked</th><th>diag front</th><th>bearing</th><th>ω/max</th><th>rotations</th><th>food Δ</th><th>recovery</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+
+function occlusionAuditResultHtml(label, audit, meta = '') {
+  const rows = audit.cases.map(row => {
+    const geometry = row.initialLosBlocked ? 'LOS BLOCKED' : row.initialPathBlocked ? 'PATH BLOCKED / LOS CLEAR' : 'OPEN';
+    const reachSteps = row.meanReachSteps > 0 ? row.meanReachSteps.toFixed(1) : '—';
+    return `<tr><td>${row.caseName}</td><td>${geometry}</td><td>${pct(row.reachRate)}</td><td>${pct(row.spinRate)}</td><td>${reachSteps}</td><td>${row.meanMaxWindowRotations.toFixed(2)}</td><td>${row.meanTotalRotations.toFixed(2)}</td><td>${row.meanDistanceProgress.toFixed(3)}</td><td>${row.meanWallHits.toFixed(1)}</td></tr>`;
+  }).join('');
+  return `<div class="orientationResultBlock"><div class="orientationResultHead"><b>${label}</b><span>${meta}</span></div><div class="orientationBandLine">Same start pose, food position, zero recurrent state, and paired stochastic action RNG seed per trial. Only wall geometry differs.</div><div class="spinTableWrap"><table class="resultsTable spinTable"><thead><tr><th>case</th><th>geometry</th><th>reach</th><th>spin</th><th>steps→food</th><th>max rolling turns</th><th>total turns</th><th>food Δ</th><th>wall hits</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+}
+
+function updateSpinTelemetryUI() {
+  if (!el.spinCompactSummary) return;
+  const summary = liveSpinRecorder.summary();
+  const recorderState = mode === 'OBSERVE' ? (paused ? 'PAUSED' : summary.active ? 'CAPTURING EVENT' : 'ARMED') : 'STANDBY';
+  el.spinRecorderStatus.textContent = `${recorderState} • ${summary.samples.toLocaleString()} samples`;
+  el.spinEventCount.textContent = `${summary.events}${summary.active ? ' + active' : ''}`;
+  el.spinBlockedRate.textContent = summary.events ? `${pct(summary.blockedAtOnsetRate)} event onsets` : '—';
+  el.spinLatestCause.textContent = summary.latestCause;
+  el.spinCompactSummary.textContent = `${recorderState} • ${summary.events} captured${summary.events ? ` • blocked ${pct(summary.blockedAtOnsetRate)}` : ''}`;
+  el.spinResults.innerHTML = spinEventTableHtml(liveSpinRecorder.events);
+
+  if (lastOcclusionAudit) {
+    let html = `<div class="orientationAuditIntro">Controlled paired geometry audit. OPEN has no wall. CLEARANCE keeps the food centerline visible but places a wall inside the agent's direct travel corridor. OCCLUDED crosses the food centerline itself. The LOS/path labels are diagnostics only and are never policy inputs.</div>`;
+    html += occlusionAuditResultHtml(`LEARNER • ${lastOcclusionAudit.lineageId}`, lastOcclusionAudit.learner.result, `@ ${Number(lastOcclusionAudit.learner.steps).toLocaleString()} steps`);
+    if (lastOcclusionAudit.champion) html += occlusionAuditResultHtml('CHAMPION BALANCED', lastOcclusionAudit.champion.result, `@ ${Number(lastOcclusionAudit.champion.steps).toLocaleString()} steps`);
+    html += `<div class="orientationAuditNote">A telemetry “spin” requires at least ${SPIN_TELEMETRY.spinRotationThreshold.toFixed(2)} rolling rotations while food-distance progress stays ≤ ${SPIN_TELEMETRY.poorProgressDistance.toFixed(3)}. It is a diagnostic event definition, not a policy failure declaration.</div>`;
+    el.spinOcclusionResults.innerHTML = html;
+  }
+}
+
+async function runOcclusionConflictAudit() {
+  paused = true;
+  el.pause.textContent = 'Resume';
+  el.spinOcclusionRun.disabled = true;
+  setStatus(`Running read-only occlusion conflict audit: ${OCCLUSION_AUDIT.cases.length} geometries × ${OCCLUSION_AUDIT.trialsPerCase} paired seeded trials. Training is paused.`);
+  await yieldUI();
+  try {
+    const learnerBefore = JSON.stringify(session.model.serialize());
+    const learnerResult = runOcclusionAudit(session.model);
+    if (learnerBefore !== JSON.stringify(session.model.serialize())) throw new Error('occlusion audit safety check failed: Learner weights changed');
+    await yieldUI();
+    const result = {
+      ranAtSteps: session.totalSteps,
+      lineageId: session.learnerLineage?.id || 'learner',
+      learner: { steps: session.totalSteps, result: learnerResult },
+      champion: null,
+    };
+    const champion = session.getArchiveBrain('balanced');
+    if (champion?.model) {
+      const model = new RecurrentActorCritic(1);
+      model.restore(champion.model);
+      const before = JSON.stringify(model.serialize());
+      const championResult = runOcclusionAudit(model);
+      if (before !== JSON.stringify(model.serialize())) throw new Error('occlusion audit safety check failed: Champion weights changed');
+      result.champion = { steps: champion.savedAtSteps, result: championResult };
+    }
+    lastOcclusionAudit = result;
+    updateSpinTelemetryUI();
+    const open = learnerResult.cases.find(x => x.caseName === 'open');
+    const blocked = learnerResult.cases.find(x => x.caseName === 'occluded');
+    setStatus(`Occlusion audit complete. Learner OPEN reach ${pct(open?.reachRate || 0)} / spin ${pct(open?.spinRate || 0)}; OCCLUDED reach ${pct(blocked?.reachRate || 0)} / spin ${pct(blocked?.spinRate || 0)}. No learning, physics, sensor, reward, checkpoint, or Champion state changed.`);
+  } catch (e) {
+    setStatus(`Occlusion audit failed safely: ${e.message}`);
+  } finally {
+    el.spinOcclusionRun.disabled = false;
+  }
+}
+
 function orientationResultHtml(label, audit, meta = '') {
   const rows = audit.bearings.map(row => {
     const face = pct(row.facingRate);
@@ -1128,7 +1220,7 @@ el.newBrain.addEventListener('click', () => { if (confirm('Create a new untraine
 el.learn.addEventListener('click', () => setMode('LEARN'));
 el.observe.addEventListener('click', () => setMode('OBSERVE'));
 el.probe.addEventListener('click', () => setMode('PROBE'));
-el.pause.addEventListener('click', () => { paused = !paused; resetTrainRateMeter(); el.pause.textContent = paused ? 'Resume' : 'Pause'; setStatus(paused ? 'Paused. Neural state remains inspectable.' : 'Resumed.'); });
+el.pause.addEventListener('click', () => { paused = !paused; resetTrainRateMeter(); el.pause.textContent = paused ? 'Resume' : 'Pause'; updateSpinTelemetryUI(); setStatus(paused ? 'Paused. Neural state remains inspectable.' : 'Resumed.'); });
 el.brainView.addEventListener('change', () => { neuralRenderer.mode = el.brainView.value; });
 el.worldFx?.addEventListener('change', () => {
   worldRenderer.overlayMode = el.worldFx.value;
@@ -1137,7 +1229,7 @@ el.worldFx?.addEventListener('change', () => {
 el.brainSource.addEventListener('change', () => {
   const ref = selectedBrainRef();
   if (ref.type !== 'learner' && !ref.brain?.model) { el.brainSource.value = 'latest'; return; }
-  if (mode !== 'LEARN') resetViewState();
+  if (mode !== 'LEARN') { liveSpinRecorder.reset(); resetViewState(); }
   el.viewBrainBadge.textContent = selectedSourceLabel();
   syncArchiveControls();
   setStatus(mode === 'LEARN' ? 'View Brain selection applies in Observe/Probe; Learn always shows/trains the autonomous Learner.' : `Now inspecting ${selectedSourceLabel().toLowerCase()} brain.`);
@@ -1273,6 +1365,12 @@ el.switchBranch.addEventListener('click', () => {
   } catch (e) { setStatus(`Branch switch failed: ${e.message}`); }
 });
 el.orientationRun?.addEventListener('click', runRearTargetAudit);
+el.spinOcclusionRun?.addEventListener('click', runOcclusionConflictAudit);
+el.spinClear?.addEventListener('click', () => {
+  liveSpinRecorder.reset();
+  updateSpinTelemetryUI();
+  setStatus('Live spin telemetry cleared. Recorder remains read-only and will arm automatically in OBSERVE mode.');
+});
 el.test.addEventListener('click', runUnseen);
 el.compare.addEventListener('click', compareBrains);
 el.brain.addEventListener('pointerdown', e => { const text = neuralRenderer.inspectAt(e.clientX, e.clientY); if (text) el.inspect.textContent = text; });

@@ -1,55 +1,77 @@
-# MicroMind v0.1.4.1.1 — Rear-Target & Rotation Audit
+# MicroMind v0.1.4.1.2 — Live Occlusion & Spin-Cause Telemetry
 
-**Build:** `ROTAUD-01411`  
-**Parent:** v0.1.4.1 `VALCONF-0141`
+**Build:** `OCCSPIN-01412`  
+**Parent:** v0.1.4.1.1 `ROTAUD-01411`
 
-This is a narrow **observational diagnostic** build. It preserves the v0.1.4.1 validation-confidence work and adds a controlled way to measure the spinning behavior seen when food is behind the agent.
+This is another deliberately narrow **observational** build. The accepted rear-target audit showed that the long-running Learner and Balanced Champion can both turn to and reach targets behind them in an empty arena with 0% detected spin. That rules out “food is behind me” as the simple cause of the live-world behavior.
 
-## Why this build exists
+The remaining observation to test is the one seen on the phone: MicroMind can start spinning when the target does not have a clean/direct route or visual line through the world geometry.
 
-The current policy observation does not have visual occlusion for food: nearest-food relative X/Y and distance remain available even when the target is behind the agent. The three limited rays are danger sensors. That means the observed rear-target spin should be diagnosed first as a **turn-control / action-selection / angular-dynamics interaction**, not treated as proof of failed memory.
+## What is new
 
-Also, the existing `BRAKE` action damps linear velocity only. Angular velocity receives the same global angular drag as every other action. This build does not change that physics; it measures whether the learned policy selects BRAKE while already rotating.
+Research → **LIVE OCCLUSION / SPIN TELEMETRY** adds two read-only tools.
 
-## New read-only audit
+### 1. Live OBSERVE recorder
 
-Research → **REAR-TARGET / ROTATION AUDIT** adds one manual button. When run:
+The recorder arms automatically whenever **OBSERVE** mode is entered. It watches the real selected policy in the normal procedural Observe world and keeps only a small session-memory buffer.
 
-- training is paused so the tested weights cannot move;
-- the Learner is tested at fixed target bearings `-179, -135, -90, -45, 0, +45, +90, +135, +179°`;
-- each bearing uses 8 deterministic-seed **stochastic-policy** trials;
-- each trial starts from rest, with zero recurrent state, in an empty arena using the real policy observations and real world angular physics;
-- metrics include facing success, food reach, spin incidence, steps-to-face, cumulative angular rotations, BRAKE-while-turning rate, and the initial dominant policy action;
-- if a Balanced Champion exists, it is tested with the same protocol for comparison;
-- an in-runtime model-serialization check verifies the audit did not modify either tested policy.
+For each step it records diagnostic-only context such as:
 
-The audit results are deliberately **not persisted** into save schema. Reloading the page clears them.
+- nearest-food bearing and distance;
+- whether a wall geometrically crosses the center-to-center food line (`LOS BLOCKED`);
+- whether the agent-radius travel corridor to food is blocked even when the centerline stays clear (`PATH BLOCKED`);
+- a diagnostic ±70° forward cone (not a new sensor);
+- left/front/right danger-ray values;
+- angular velocity and linear speed;
+- sampled action, policy probabilities and value;
+- recurrent hidden-state magnitude/change;
+- reward components and food-distance progress;
+- target switches.
+
+A potential spin event is captured only after substantial rolling angular travel **and** poor progress toward food. The event stores the lead-up plus a short recovery window, then assigns a descriptive context such as `wall/food-conflict`, `clearance/danger-conflict`, `outside-forward-cone`, `angular-momentum`, or `target-switch`.
+
+Those labels are diagnostic classifications only. They do not tell the policy what happened and they do not change behavior.
+
+### 2. Controlled occlusion audit
+
+**Run Controlled Occlusion Audit** pauses training and tests the exact Learner in three paired geometries:
+
+- **OPEN** — no wall;
+- **CLEARANCE** — food centerline remains visible, but a wall intersects the agent-radius direct travel corridor;
+- **OCCLUDED** — the wall crosses the food centerline itself.
+
+Each case uses the same start pose, food position, zero recurrent state and paired stochastic-action RNG seed for the corresponding trial. The audit reports reach rate, spin incidence, time to food, rolling/total angular travel, food-distance progress and wall hits. A Balanced Champion is tested too when available.
+
+## Important interpretation
+
+`diag LOS BLOCKED`, `diag PATH BLOCKED`, and the forward-cone flag are **external measurements only**. The neural network still receives the exact same 10-value observation as before. Nearest-food relative X/Y and distance remain present even through walls. No occlusion bit or “vision” bit has been added to the brain.
 
 ## What did not change
 
 No changes were made to:
 
-- policy architecture or weights
-- PPO math / hyperparameters
-- recurrent training behavior
-- curiosity model or reward
-- curriculum / rehearsal
-- world physics
-- observation vector / three-ray perception
-- rewards
-- spawn clearance
-- Champion promotion / Hall of Fame
-- save/checkpoint schema (still **10**)
-- validation-confidence logic
-- final held-out evaluation
-- visualization renderers / runtime throughput behavior
+- policy architecture, weights or recurrent dynamics;
+- PPO math or hyperparameters;
+- curiosity model or intrinsic reward;
+- curriculum or rehearsal;
+- world physics or collisions;
+- observation vector or three danger rays;
+- rewards;
+- spawn clearance;
+- Champion promotion / Hall of Fame;
+- validation-confidence logic;
+- checkpoint/save schema (still **10**);
+- final held-out evaluation.
+
+Live telemetry and controlled-audit results are session-only and disappear on reload.
 
 ## iPhone acceptance test
 
-1. Deploy and confirm `v0.1.4.1.1 • ROTAUD-01411`.
-2. Load the intended long-running Manual Save and verify Learner lineage, step count and Champion before doing anything else.
-3. Open **RESEARCH → REAR-TARGET / ROTATION AUDIT**.
-4. Tap **Run Rear-Target Audit**. Training should pause automatically.
-5. Screenshot the Learner table, especially `±135°` and `±179°`, plus the rear summary line.
-6. If a Balanced Champion exists, screenshot its table too.
-7. Do **not** change sensors, turn physics, rewards, PPO or recurrent training yet. We will use these measurements to choose one targeted change.
+1. Deploy and confirm **`v0.1.4.1.2 • OCCSPIN-01412`**.
+2. Load the intended long-running Manual Save and confirm the Learner lineage/step count and Champion are correct.
+3. In **RESEARCH → LIVE OCCLUSION / SPIN TELEMETRY**, tap **Run Controlled Occlusion Audit** once and screenshot the Learner and Champion tables.
+4. Switch to **OBSERVE**. The recorder automatically shows `ARMED`; no extra switch is required.
+5. Watch normal behavior. The LIVE world header now says `diag DIRECT`, `diag PATH BLOCKED`, or `diag LOS BLOCKED` for the current nearest food. This is only a diagnostic label.
+6. When the spinning behavior occurs, let it continue long enough for the recorder to capture the event and recovery window.
+7. Return to **RESEARCH → LIVE OCCLUSION / SPIN TELEMETRY** and screenshot the event table. Several events are even better than one.
+8. Do **not** change sensors, rewards, PPO, recurrent training, BRAKE physics or turn physics yet. v0.1.4.2 should change exactly one mechanism supported by this evidence.

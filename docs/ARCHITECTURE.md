@@ -1,4 +1,4 @@
-# Architecture — v0.1.4.1.1
+# Architecture — v0.1.4.1.2
 
 ## Policy learner
 
@@ -27,6 +27,17 @@ This layer is observational. It never restores weights, changes rewards, alters 
 
 The audit reports facing success, target reach, cumulative angular travel, a conservative spin-incidence threshold, BRAKE selection while angular speed is already substantial, and initial policy preference at each bearing. Because food relative X/Y is always present in the current observation, this audit specifically measures turn-control behavior rather than visual object permanence.
 
+
+## Live occlusion / spin telemetry
+
+`live-occlusion-spin:v1` lives entirely in the app/evaluation layer. During **OBSERVE** only, it samples the already-computed policy snapshot and world state around the normal `World.step()` call. It does not run during PPO training rollouts.
+
+Geometry is measured externally in two ways: raw center-to-center food line versus wall rectangles (`LOS BLOCKED`) and the same line versus walls expanded by the actual agent collision radius (`PATH BLOCKED`). A ±70° forward-cone flag is also recorded as a descriptive geometric feature. None of these values are appended to the 10-value policy observation.
+
+A bounded rolling detector looks for substantial cumulative angular travel with little reduction in food distance. Completed events retain lead-up and recovery context in memory only, capped at 12 events. Event classifications are descriptive summaries, not labels used by learning.
+
+`occlusion-conflict-audit:v1` creates temporary paired worlds with identical start pose, food placement, zero recurrent state and corresponding stochastic-action RNG seeds. OPEN, CLEARANCE and OCCLUDED differ only in wall geometry. It updates recurrent hidden state during each temporary trajectory because that is part of normal inference, but stores no PPO transition and mutates no persisted learner state.
+
 ## Stability observatory
 
 PPO diagnostics remain read-only: losses, KL, clip fraction, advantage distribution, critic explained variance, gradient norms/clipping, and parameter movement. Regression events now retain the confidence-audit verdict alongside the preceding PPO window.
@@ -42,7 +53,7 @@ PPO diagnostics remain read-only: losses, KL, clip fraction, advantage distribut
 
 ## Persistence
 
-Schema **10** adds the previous-validation policy reference and bounded validation-confidence history to schema 9. Schemas 1–10 load. Schema-9 migration starts with no invented confirmation evidence; the first same-lineage v0.1.4.1+ validation establishes a fresh paired reference. The rear-target audit adds no persistent fields, so schema remains 10.
+Schema **10** adds the previous-validation policy reference and bounded validation-confidence history to schema 9. Schemas 1–10 load. Schema-9 migration starts with no invented confirmation evidence; the first same-lineage v0.1.4.1+ validation establishes a fresh paired reference. The rear-target audit and live occlusion/spin telemetry add no persistent fields, so schema remains 10.
 
 ## Cognitive Observatory
 

@@ -124,3 +124,13 @@
 .orientationTableWrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
 .orientationTable{min-width:720px}
 @media(max-width:820px){.orientationSummaryGrid{grid-template-columns:repeat(2,minmax(0,1fr))}}
+
+/* v0.1.4.1.2 Live Occlusion & Spin-Cause Telemetry */
+.spinResults{margin:0 12px 10px;padding:9px 10px;border:1px solid rgba(113,173,195,.13);border-radius:9px;background:rgba(4,11,17,.48);font:10px/1.5 ui-monospace,SFMono-Regular,Menlo,monospace;color:#9ebbc6;overflow-x:auto;overflow-wrap:anywhere}
+.spinEmpty{white-space:normal;color:#7898a5}
+.spinAuditSubhead{padding:2px 12px 7px;font:700 9px ui-monospace,SFMono-Regular,Menlo,monospace;letter-spacing:.12em;color:#d4e8ef}
+.spinTableWrap{overflow-x:auto;-webkit-overflow-scrolling:touch}
+.spinTable{min-width:940px}
+.spinTable td,.spinTable th{text-align:right}
+.spinTable td:nth-child(3),.spinTable th:nth-child(3),.spinTable td:nth-child(5),.spinTable th:nth-child(5),.spinTable td:last-child,.spinTable th:last-child{text-align:left}
+@media(max-width:820px){.spinResults{margin-left:10px;margin-right:10px}.spinTable{min-width:900px}}

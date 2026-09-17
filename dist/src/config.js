@@ -1,5 +1,5 @@
-export const VERSION = '0.1.4.1.1';
-export const BUILD_MARKER = 'ROTAUD-01411';
+export const VERSION = '0.1.4.1.2';
+export const BUILD_MARKER = 'OCCSPIN-01412';
 
 export const CONFIG = Object.freeze({
   world: {
