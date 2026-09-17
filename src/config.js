@@ -1,5 +1,5 @@
-export const VERSION = '0.1.4.1.2';
-export const BUILD_MARKER = 'OCCSPIN-01412';
+export const VERSION = '0.1.4.1.3';
+export const BUILD_MARKER = 'OCCCHAR-01413';
 
 export const CONFIG = Object.freeze({
   world: {

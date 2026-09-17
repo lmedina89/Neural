@@ -1,77 +1,66 @@
-# MicroMind v0.1.4.1.2 — Live Occlusion & Spin-Cause Telemetry
+# MicroMind v0.1.4.1.3 — Occlusion Failure Characterization
 
-**Build:** `OCCSPIN-01412`  
-**Parent:** v0.1.4.1.1 `ROTAUD-01411`
+**Build:** `OCCCHAR-01413`  
+**Parent:** v0.1.4.1.2 `OCCSPIN-01412`
 
-This is another deliberately narrow **observational** build. The accepted rear-target audit showed that the long-running Learner and Balanced Champion can both turn to and reach targets behind them in an empty arena with 0% detected spin. That rules out “food is behind me” as the simple cause of the live-world behavior.
-
-The remaining observation to test is the one seen on the phone: MicroMind can start spinning when the target does not have a clean/direct route or visual line through the world geometry.
+This is a deliberately narrow **read-only diagnostic build**. The previous controlled audit showed a repeatable split: the accepted Learner and Balanced Champion could reach food in OPEN and path-blocked/LOS-clear geometry, but both failed when a wall blocked the food centerline and accumulated much more turning. v0.1.4.1.3 characterizes that failure without changing the policy, sensors, rewards, physics, curriculum, PPO, recurrent network, or Champion behavior.
 
 ## What is new
 
-Research → **LIVE OCCLUSION / SPIN TELEMETRY** adds two read-only tools.
+### Broader live rotation-trap recorder
 
-### 1. Live OBSERVE recorder
+The OBSERVE recorder now catches both sustained one-way spinning and the more visually realistic **turn → hesitate → reverse → turn** loops that the old continuous-spin threshold could miss.
 
-The recorder arms automatically whenever **OBSERVE** mode is entered. It watches the real selected policy in the normal procedural Observe world and keeps only a small session-memory buffer.
+It keeps a bounded session-only history and measures:
 
-For each step it records diagnostic-only context such as:
+- cumulative and net angular travel;
+- turn-direction reversals;
+- repeated crossings of the food bearing;
+- turn / thrust / brake action rates;
+- thrust steps that temporarily increase food distance;
+- direct-path and centerline LOS blockage;
+- danger-ray values, angular velocity, recurrent-state change, target switches, reward components, and recovery context.
 
-- nearest-food bearing and distance;
-- whether a wall geometrically crosses the center-to-center food line (`LOS BLOCKED`);
-- whether the agent-radius travel corridor to food is blocked even when the centerline stays clear (`PATH BLOCKED`);
-- a diagnostic ±70° forward cone (not a new sensor);
-- left/front/right danger-ray values;
-- angular velocity and linear speed;
-- sampled action, policy probabilities and value;
-- recurrent hidden-state magnitude/change;
-- reward components and food-distance progress;
-- target switches.
+A captured event is descriptive telemetry only. The detector never becomes a policy input or reward.
 
-A potential spin event is captured only after substantial rolling angular travel **and** poor progress toward food. The event stores the lead-up plus a short recovery window, then assigns a descriptive context such as `wall/food-conflict`, `clearance/danger-conflict`, `outside-forward-cone`, `angular-momentum`, or `target-switch`.
+### Seven-geometry occlusion failure audit
 
-Those labels are diagnostic classifications only. They do not tell the policy what happened and they do not change behavior.
-
-### 2. Controlled occlusion audit
-
-**Run Controlled Occlusion Audit** pauses training and tests the exact Learner in three paired geometries:
+**Run Occlusion Failure Audit** pauses training and tests the exact Learner in seven paired geometries using the same start pose, food position, zero recurrent state, and paired stochastic action RNG stream for corresponding trials:
 
 - **OPEN** — no wall;
-- **CLEARANCE** — food centerline remains visible, but a wall intersects the agent-radius direct travel corridor;
-- **OCCLUDED** — the wall crosses the food centerline itself.
+- **CLEARANCE** — centerline LOS is clear but the agent-radius travel corridor is blocked;
+- **NARROW CENTER** — small centered blocker;
+- **WIDE CENTER** — taller centered blocker requiring a real bypass;
+- **LEFT-HEAVY BLOCK** — asymmetric blocker whose shorter bypass is to the right;
+- **RIGHT-HEAVY BLOCK** — mirrored asymmetric blocker whose shorter bypass is to the left;
+- **LONG DETOUR** — large barrier requiring sustained lateral commitment.
 
-Each case uses the same start pose, food position, zero recurrent state and paired stochastic-action RNG seed for the corresponding trial. The audit reports reach rate, spin incidence, time to food, rolling/total angular travel, food-distance progress and wall hits. A Balanced Champion is tested too when available.
+The audit reports reach rate, direct-path clearing, time to clear, successful detour rate, rotation-trap rate, steps to food, total turns, reversals, food-bearing crossings, turn/thrust/away-thrust mix, maximum temporary retreat, and wall hits. A Balanced Champion is tested too when available.
 
-## Important interpretation
-
-`diag LOS BLOCKED`, `diag PATH BLOCKED`, and the forward-cone flag are **external measurements only**. The neural network still receives the exact same 10-value observation as before. Nearest-food relative X/Y and distance remain present even through walls. No occlusion bit or “vision” bit has been added to the brain.
+“Detour” is only a diagnostic label: a run must actually reach food after clearing an initially blocked direct path with measurable lateral excursion. There is no pathfinder or scripted navigation behavior.
 
 ## What did not change
 
 No changes were made to:
 
-- policy architecture, weights or recurrent dynamics;
-- PPO math or hyperparameters;
+- policy architecture, weights, recurrent dynamics, or observation size;
+- PPO math, hyperparameters, optimizer, or rollout behavior;
 - curiosity model or intrinsic reward;
-- curriculum or rehearsal;
-- world physics or collisions;
-- observation vector or three danger rays;
-- rewards;
-- spawn clearance;
-- Champion promotion / Hall of Fame;
-- validation-confidence logic;
+- curriculum, rehearsal, rewards, or spawn logic;
+- world physics, collisions, BRAKE behavior, or turn physics;
+- the three danger rays or nearest-food X/Y/distance inputs;
+- Champion promotion, Hall of Fame, branching, or validation-confidence logic;
 - checkpoint/save schema (still **10**);
 - final held-out evaluation.
 
-Live telemetry and controlled-audit results are session-only and disappear on reload.
+All v0.1.4.1.3 telemetry and controlled-audit results remain session-only.
 
 ## iPhone acceptance test
 
-1. Deploy and confirm **`v0.1.4.1.2 • OCCSPIN-01412`**.
-2. Load the intended long-running Manual Save and confirm the Learner lineage/step count and Champion are correct.
-3. In **RESEARCH → LIVE OCCLUSION / SPIN TELEMETRY**, tap **Run Controlled Occlusion Audit** once and screenshot the Learner and Champion tables.
-4. Switch to **OBSERVE**. The recorder automatically shows `ARMED`; no extra switch is required.
-5. Watch normal behavior. The LIVE world header now says `diag DIRECT`, `diag PATH BLOCKED`, or `diag LOS BLOCKED` for the current nearest food. This is only a diagnostic label.
-6. When the spinning behavior occurs, let it continue long enough for the recorder to capture the event and recovery window.
-7. Return to **RESEARCH → LIVE OCCLUSION / SPIN TELEMETRY** and screenshot the event table. Several events are even better than one.
-8. Do **not** change sensors, rewards, PPO, recurrent training, BRAKE physics or turn physics yet. v0.1.4.2 should change exactly one mechanism supported by this evidence.
+1. Deploy and confirm **`v0.1.4.1.3 • OCCCHAR-01413`**.
+2. Load the intended long-running Manual Save and confirm the Learner lineage/step count and Balanced Champion are correct.
+3. Open **RESEARCH → OCCLUSION / ROTATION-TRAP TELEMETRY** and run **Occlusion Failure Audit** once.
+4. Screenshot the Learner and Champion tables, especially NARROW/WIDE, LEFT/RIGHT-heavy, and LONG DETOUR.
+5. Switch to **OBSERVE** and let the normal loaded policy run until the visually observed turning loop occurs.
+6. Return to RESEARCH after a trap is captured and screenshot the live event table. Several real events are better than one.
+7. Do not change sensors, rewards, PPO, recurrent training, or physics yet. v0.1.4.2 should change only the mechanism supported by these results.

@@ -1,13 +1,13 @@
-# What MicroMind learns — v0.1.4.1.2
+# What MicroMind learns — v0.1.4.1.3
 
-Programmed are the physics/world rules, observation/action definitions, external rewards, curriculum/rehearsal schedule, validation protocols, curiosity predictor architecture, intrinsic-reward caps, and the read-only research protocols.
+MicroMind still learns with the same recurrent actor-critic policy, PPO update, curiosity module, curriculum, rehearsal schedule, reward structure, observation vector, and world physics used by the accepted v0.1.4.1.2 parent.
 
-Learned by the **1,040-parameter policy** are recurrent hidden-state dynamics, policy probabilities, value estimates, and behavioral strategies. Learned separately by the **441-parameter predictor** is how the nine dynamic sensory values tend to change after each state/action pair.
+v0.1.4.1.3 is **observational only**. It does not teach detouring, add line-of-sight to the neural observation, modify danger sensors, add pathfinding, alter rewards, or change angular control.
 
-v0.1.4.1 does **not** add a reward, rule, policy feature, or behavioral intervention. It changes how regression evidence is measured. Suspicious validation drops can trigger a larger paired replay against the exact previous same-lineage policy.
+The new rotation-trap telemetry exists to answer a specific question raised by physical testing: when food remains numerically represented in the policy observation but the direct route is obstructed by a wall, does the policy possess a learned strategy for temporarily moving laterally or away from the food vector, or does it fall into repeated turning/search behavior?
 
-v0.1.4.1.1 also does **not** teach a behavior. Its rear-target audit showed whether an existing policy can orient to clean fixed bearings without changing sensors, memory, rewards or turn physics.
+The controlled audit therefore measures actual behavior rather than prescribing it. OPEN, CLEARANCE, centered blockers, mirrored asymmetric blockers, and a long barrier are evaluated with paired stochastic action streams. Metrics such as path clearing, lateral excursion, temporary retreat, cumulative rotation, turn reversals, bearing crossings, action mix, and eventual food reach are diagnostic outputs only.
 
-v0.1.4.1.2 remains observational. It computes wall/food geometry and a diagnostic forward cone **outside** the neural observation, records real OBSERVE transitions, and runs temporary controlled worlds. None of those diagnostic values become policy inputs, rewards or PPO targets. The live recorder is session-only and bounded.
+A “successful detour” means that an initially blocked direct path became clear and the agent later reached food after measurable lateral excursion. It is not a policy label, target action, imitation signal, or reward.
 
-PPO stability telemetry remains observational. Curiosity remains the same experimentally bounded prediction-error reward from v0.1.3; it is not consciousness, desire, or subjective interest.
+Save schema remains **10**. Diagnostic state is session-only and is never serialized into the learner or Champion.

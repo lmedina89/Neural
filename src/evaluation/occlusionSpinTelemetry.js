@@ -4,27 +4,53 @@ import { PRNG, domainSeed } from '../utils/prng.js';
 
 const TAU = Math.PI * 2;
 const DEG = 180 / Math.PI;
-const RAD = Math.PI / 180;
 
 // Entirely observational. None of these thresholds feed the policy, rewards,
 // curriculum, world dynamics, PPO, checkpoint format, or Champion selection.
+// The v2 detector intentionally broadens the old "continuous spin" definition
+// into a rotation-trap definition that also catches turn/hesitate/reverse loops.
 export const SPIN_TELEMETRY = Object.freeze({
-  protocol: 'live-occlusion-spin:v1',
-  historySteps: 72,          // ~4 s at the 55 ms OBSERVE stepping cadence
-  spinWindowSteps: 48,       // ~2.6 s rolling diagnostic window
-  postCaptureSteps: 24,      // capture recovery after a detected event
-  spinRotationThreshold: 0.90,
-  poorProgressDistance: 0.035,
-  eventCooldownSteps: 54,
+  protocol: 'live-occlusion-rotation-trap:v2',
+  historySteps: 160,              // ~8.8 s at the 55 ms OBSERVE stepping cadence
+  trapWindowSteps: 96,            // ~5.3 s rolling diagnostic window
+  postCaptureSteps: 24,           // capture a short recovery tail
+  rotationTrapThreshold: 0.55,    // absolute angular travel inside the window
+  oscillationRotationThreshold: 0.34,
+  poorProgressDistance: 0.050,
+  oscillationProgressDistance: 0.040,
+  minDirectionReversals: 2,
+  minBearingCrossings: 2,
+  eventCooldownSteps: 110,
   maxEvents: 12,
   forwardConeDeg: 70,
+  angleMotionEpsilon: 0.006,
+  bearingDeadbandDeg: 8,
+  awayProgressEpsilon: 0.00025,
 });
 
 export const OCCLUSION_AUDIT = Object.freeze({
-  protocol: 'occlusion-conflict-audit:v1',
+  protocol: 'occlusion-failure-characterization:v2',
   trialsPerCase: 8,
-  maxSteps: 240,
-  cases: Object.freeze(['open', 'clearance', 'occluded']),
+  maxSteps: 360,
+  cases: Object.freeze([
+    'open',
+    'clearance',
+    'narrow-center',
+    'wide-center',
+    'left-heavy',
+    'right-heavy',
+    'long-detour',
+  ]),
+});
+
+const CASE_LABELS = Object.freeze({
+  open: 'OPEN',
+  clearance: 'CLEARANCE',
+  'narrow-center': 'NARROW CENTER',
+  'wide-center': 'WIDE CENTER',
+  'left-heavy': 'LEFT-HEAVY BLOCK',
+  'right-heavy': 'RIGHT-HEAVY BLOCK',
+  'long-detour': 'LONG DETOUR',
 });
 
 function clamp(x, lo, hi) { return Math.max(lo, Math.min(hi, x)); }
@@ -36,6 +62,9 @@ function wrapAngle(a) {
 function mean(xs) { return xs.length ? xs.reduce((s, x) => s + x, 0) / xs.length : 0; }
 function rate(xs, pred = Boolean) { return xs.length ? xs.filter(pred).length / xs.length : 0; }
 function rms(xs) { return xs?.length ? Math.sqrt(xs.reduce((s, x) => s + x * x, 0) / xs.length) : 0; }
+function isTurnAction(action) { return action === 3 || action === 4 || action === 5 || action === 6; }
+function isThrustAction(action) { return action === 1 || action === 5 || action === 6; }
+function isBrakeAction(action) { return action === 2; }
 function nearestFoodIndex(world) {
   if (!world?.food?.length) return -1;
   let best = 0;
@@ -154,16 +183,95 @@ export function captureSpinSample(world, snapshot, action, previous = null) {
   };
 }
 
-function classifyEvent(samples, triggerWindow, post) {
+function rollingTurn(samples) {
+  let turn = 0;
+  for (let i = 1; i < samples.length; i++) turn += Math.abs(wrapAngle(samples[i].angle - samples[i - 1].angle));
+  return turn;
+}
+
+function signedTurn(samples) {
+  let turn = 0;
+  for (let i = 1; i < samples.length; i++) turn += wrapAngle(samples[i].angle - samples[i - 1].angle);
+  return turn;
+}
+
+function countTurnReversals(samples, epsilon = SPIN_TELEMETRY.angleMotionEpsilon) {
+  let reversals = 0;
+  let previousSign = 0;
+  for (let i = 1; i < samples.length; i++) {
+    const d = wrapAngle(samples[i].angle - samples[i - 1].angle);
+    if (Math.abs(d) < epsilon) continue;
+    const sign = d < 0 ? -1 : 1;
+    if (previousSign && sign !== previousSign) reversals++;
+    previousSign = sign;
+  }
+  return reversals;
+}
+
+function countBearingCrossings(samples, deadband = SPIN_TELEMETRY.bearingDeadbandDeg) {
+  let crossings = 0;
+  let previousSign = 0;
+  for (const sample of samples) {
+    const b = Number(sample.foodBearingDeg) || 0;
+    if (Math.abs(b) <= deadband) continue;
+    const sign = b < 0 ? -1 : 1;
+    if (previousSign && sign !== previousSign) crossings++;
+    previousSign = sign;
+  }
+  return crossings;
+}
+
+function windowMetrics(samples, cfg = SPIN_TELEMETRY) {
+  if (!samples.length) return {
+    rotations: 0, netRotations: 0, progress: 0, reversals: 0, bearingCrossings: 0,
+    turnActionRate: 0, thrustActionRate: 0, brakeActionRate: 0, awayThrustRate: 0,
+    losBlockedRate: 0, pathBlockedRate: 0,
+  };
+  const rotations = rollingTurn(samples) / TAU;
+  const netRotations = signedTurn(samples) / TAU;
+  const progress = (samples[0].foodDistance || 0) - (samples.at(-1).foodDistance || 0);
+  const thrust = samples.filter(x => isThrustAction(x.action));
+  const awayThrust = thrust.filter(x => (Number(x.foodProgress) || 0) < -cfg.awayProgressEpsilon);
+  return {
+    rotations,
+    netRotations,
+    progress,
+    reversals: countTurnReversals(samples, cfg.angleMotionEpsilon),
+    bearingCrossings: countBearingCrossings(samples, cfg.bearingDeadbandDeg),
+    turnActionRate: rate(samples, x => isTurnAction(x.action)),
+    thrustActionRate: rate(samples, x => isThrustAction(x.action)),
+    brakeActionRate: rate(samples, x => isBrakeAction(x.action)),
+    awayThrustRate: thrust.length ? awayThrust.length / thrust.length : 0,
+    losBlockedRate: rate(samples, x => x.losBlocked),
+    pathBlockedRate: rate(samples, x => x.pathBlocked),
+  };
+}
+
+function isRotationTrap(metrics, cfg = SPIN_TELEMETRY) {
+  const poorProgressTrap = metrics.rotations >= cfg.rotationTrapThreshold
+    && metrics.progress <= cfg.poorProgressDistance;
+  const oscillationTrap = metrics.rotations >= cfg.oscillationRotationThreshold
+    && metrics.progress <= cfg.oscillationProgressDistance
+    && (metrics.reversals >= cfg.minDirectionReversals
+      || metrics.bearingCrossings >= cfg.minBearingCrossings);
+  return poorProgressTrap || oscillationTrap;
+}
+
+function classifyEvent(samples, triggerWindow, post, triggerMetrics) {
   const onset = triggerWindow.at(-1) || samples.at(-1);
   const before = triggerWindow[0] || onset;
-  const blockedRate = rate(triggerWindow, x => x.losBlocked);
-  const pathBlockedRate = rate(triggerWindow, x => x.pathBlocked);
+  const blockedRate = triggerMetrics.losBlockedRate;
+  const pathBlockedRate = triggerMetrics.pathBlockedRate;
   const forwardConeRate = rate(triggerWindow, x => x.forwardCone);
   const outsideForwardRate = 1 - forwardConeRate;
   const targetSwitch = triggerWindow.some((x, i) => i && x.targetKey !== triggerWindow[i - 1].targetKey);
   const dangerPeak = Math.max(...triggerWindow.map(x => Math.max(x.dangerL, x.dangerF, x.dangerR)), 0);
   const highOmegaAtOnset = Math.abs(onset?.omegaFraction || 0) >= 0.55;
+  const sweepRatio = triggerMetrics.rotations > 1e-9 ? Math.abs(triggerMetrics.netRotations) / triggerMetrics.rotations : 0;
+  const rotationMode = triggerMetrics.reversals >= SPIN_TELEMETRY.minDirectionReversals || triggerMetrics.bearingCrossings >= SPIN_TELEMETRY.minBearingCrossings
+    ? 'oscillatory-turn-loop'
+    : sweepRatio >= 0.72 ? 'one-way-sweep' : 'mixed-turn-loop';
+
   let cause = 'unclassified';
   if (targetSwitch) cause = 'target-switch';
   else if (blockedRate >= 0.5 && dangerPeak >= 0.25) cause = 'wall/food-conflict';
@@ -176,16 +284,18 @@ function classifyEvent(samples, triggerWindow, post) {
 
   const end = post.at(-1) || onset;
   const last12 = post.slice(-12);
-  const endTurn = last12.reduce((s, x, i) => i ? s + Math.abs(wrapAngle(x.angle - last12[i - 1].angle)) : s, 0) / TAU;
+  const endTurn = rollingTurn(last12) / TAU;
   let recovery = 'capture-ended-still-active';
   if (end?.foodReached) recovery = 'food-reached';
   else if (end?.done) recovery = 'episode-ended';
   else if (onset?.losBlocked && end && !end.losBlocked) recovery = 'line-of-sight-cleared';
+  else if (onset?.pathBlocked && end && !end.pathBlocked) recovery = 'direct-path-cleared';
   else if (endTurn < 0.15) recovery = 'rotation-settled';
   else if (end?.targetKey !== onset?.targetKey) recovery = 'target-switched';
 
   return {
     cause,
+    rotationMode,
     recovery,
     blockedRate,
     pathBlockedRate,
@@ -200,12 +310,6 @@ function classifyEvent(samples, triggerWindow, post) {
     onsetDistance: onset?.foodDistance ?? 0,
     endDistance: end?.foodDistance ?? 0,
   };
-}
-
-function rollingTurn(samples) {
-  let turn = 0;
-  for (let i = 1; i < samples.length; i++) turn += Math.abs(wrapAngle(samples[i].angle - samples[i - 1].angle));
-  return turn;
 }
 
 export class LiveSpinRecorder {
@@ -254,13 +358,12 @@ export class LiveSpinRecorder {
       return null;
     }
 
-    const window = this.history.slice(-this.cfg.spinWindowSteps);
-    if (window.length < Math.min(20, this.cfg.spinWindowSteps)) return null;
-    const turn = rollingTurn(window);
-    const progress = (window[0].foodDistance || 0) - (window.at(-1).foodDistance || 0);
+    const window = this.history.slice(-this.cfg.trapWindowSteps);
+    if (window.length < Math.min(32, this.cfg.trapWindowSteps)) return null;
+    const metrics = windowMetrics(window, this.cfg);
     const cooldownOk = sample.worldStep - this.lastTriggerStep >= this.cfg.eventCooldownSteps || sample.worldStep < this.lastTriggerStep;
     const recentFoodReached = window.some(x => x.foodReached);
-    if (cooldownOk && !recentFoodReached && turn >= this.cfg.spinRotationThreshold * TAU && progress <= this.cfg.poorProgressDistance) {
+    if (cooldownOk && !recentFoodReached && isRotationTrap(metrics, this.cfg)) {
       this.lastTriggerStep = sample.worldStep;
       this.active = {
         id: ++this.eventCounter,
@@ -269,8 +372,7 @@ export class LiveSpinRecorder {
         stageName: world.stage?.name || 'Unknown',
         pre: this.history.slice(),
         triggerWindow: window.slice(),
-        triggerRotations: turn / TAU,
-        triggerProgress: progress,
+        triggerMetrics: metrics,
         post: [],
       };
       if (sample.done || sample.foodReached) return this.finalizeActive();
@@ -280,14 +382,21 @@ export class LiveSpinRecorder {
   finalizeActive() {
     if (!this.active) return null;
     const e = this.active;
-    const cls = classifyEvent(e.pre, e.triggerWindow, e.post);
+    const cls = classifyEvent(e.pre, e.triggerWindow, e.post, e.triggerMetrics);
     const completed = {
       id: e.id,
       seed: e.seed,
       stageName: e.stageName,
       triggerStep: e.triggerStep,
-      triggerRotations: e.triggerRotations,
-      triggerProgress: e.triggerProgress,
+      triggerRotations: e.triggerMetrics.rotations,
+      triggerNetRotations: e.triggerMetrics.netRotations,
+      triggerProgress: e.triggerMetrics.progress,
+      triggerReversals: e.triggerMetrics.reversals,
+      triggerBearingCrossings: e.triggerMetrics.bearingCrossings,
+      triggerTurnActionRate: e.triggerMetrics.turnActionRate,
+      triggerThrustActionRate: e.triggerMetrics.thrustActionRate,
+      triggerBrakeActionRate: e.triggerMetrics.brakeActionRate,
+      triggerAwayThrustRate: e.triggerMetrics.awayThrustRate,
       ...cls,
       samples: [...e.pre, ...e.post],
     };
@@ -307,22 +416,42 @@ export class LiveSpinRecorder {
       pathBlockedSampleRate: this.totalSamples ? this.pathBlockedSamples / this.totalSamples : 0,
       blockedAtOnsetRate: rate(events, e => e.blockedRate >= 0.5),
       wallConflictRate: rate(events, e => e.cause === 'wall/food-conflict'),
+      oscillatoryRate: rate(events, e => e.rotationMode === 'oscillatory-turn-loop'),
       latestCause: events.at(-1)?.cause || '—',
+      latestMode: events.at(-1)?.rotationMode || '—',
       latestRecovery: events.at(-1)?.recovery || '—',
     };
   }
 }
 
-const AUDIT_STAGE = Object.freeze({ id: -42, name: 'Occlusion Conflict Audit', foods: 1, hazards: 0, walls: 0 });
+const AUDIT_STAGE = Object.freeze({ id: -42, name: 'Occlusion Failure Characterization', foods: 1, hazards: 0, walls: 0 });
+
+function wallsForCase(caseName) {
+  switch (caseName) {
+    case 'open': return [];
+    // Raw centerline remains clear; collision-radius corridor is blocked.
+    case 'clearance': return [{ x: 0.47, y: 0.52, w: 0.08, h: 0.18 }];
+    // Small centered obstacle: minimum detour demand.
+    case 'narrow-center': return [{ x: 0.485, y: 0.46, w: 0.05, h: 0.08 }];
+    // Taller centered obstacle: either side is possible but requires a real bypass.
+    case 'wide-center': return [{ x: 0.46, y: 0.34, w: 0.08, h: 0.32 }];
+    // Heading starts to +X. LEFT means negative-Y/up in this world convention.
+    // This wall occupies more of the left-turn side, so the shorter bypass is RIGHT.
+    case 'left-heavy': return [{ x: 0.46, y: 0.25, w: 0.08, h: 0.29 }];
+    // Mirror image: shorter bypass is LEFT.
+    case 'right-heavy': return [{ x: 0.46, y: 0.46, w: 0.08, h: 0.29 }];
+    // Large barrier that requires committing to a substantial lateral detour.
+    case 'long-detour': return [{ x: 0.46, y: 0.18, w: 0.08, h: 0.64 }];
+    default: throw new Error(`Unknown occlusion-audit case: ${caseName}`);
+  }
+}
 
 function prepareAuditWorld(seed, caseName) {
   const env = new World(seed, AUDIT_STAGE);
   env.agent = { x: 0.24, y: 0.50, vx: 0, vy: 0, angle: 0, omega: 0, energy: CONFIG.energy.initial };
   env.food = [{ x: 0.76, y: 0.50, r: CONFIG.world.foodRadius }];
   env.hazards = [];
-  if (caseName === 'open') env.walls = [];
-  else if (caseName === 'clearance') env.walls = [{ x: 0.47, y: 0.52, w: 0.08, h: 0.18 }];
-  else env.walls = [{ x: 0.47, y: 0.44, w: 0.08, h: 0.12 }];
+  env.walls = wallsForCase(caseName);
   env.stepCount = 0;
   env.totalReward = 0;
   env.foodCollected = 0;
@@ -334,10 +463,85 @@ function prepareAuditWorld(seed, caseName) {
   return env;
 }
 
+function analyzeTrial(samples, initialVisibility, reached, firstReachStep, env) {
+  let maxWindowRotations = 0;
+  let rotationTrap = false;
+  let trapWindows = 0;
+  for (let i = 0; i < samples.length; i++) {
+    const w = samples.slice(Math.max(0, i - SPIN_TELEMETRY.trapWindowSteps + 1), i + 1);
+    if (w.length < 32) continue;
+    const metrics = windowMetrics(w);
+    maxWindowRotations = Math.max(maxWindowRotations, metrics.rotations);
+    if (isRotationTrap(metrics)) {
+      rotationTrap = true;
+      trapWindows++;
+    }
+  }
+
+  const totalRotations = rollingTurn(samples) / TAU;
+  const netRotations = signedTurn(samples) / TAU;
+  const turnReversals = countTurnReversals(samples);
+  const bearingCrossings = countBearingCrossings(samples);
+  const turnActionRate = rate(samples, x => isTurnAction(x.action));
+  const thrustActionRate = rate(samples, x => isThrustAction(x.action));
+  const brakeActionRate = rate(samples, x => isBrakeAction(x.action));
+  const thrustSamples = samples.filter(x => isThrustAction(x.action));
+  const awayThrustRate = thrustSamples.length
+    ? rate(thrustSamples, x => (Number(x.foodProgress) || 0) < -SPIN_TELEMETRY.awayProgressEpsilon)
+    : 0;
+
+  const firstPathClear = initialVisibility.pathBlocked
+    ? samples.findIndex(x => x.nextPathBlocked === false)
+    : -1;
+  const firstLosClear = initialVisibility.losBlocked
+    ? samples.findIndex(x => x.nextLosBlocked === false)
+    : -1;
+  const pathCleared = initialVisibility.pathBlocked ? firstPathClear >= 0 : true;
+  const losCleared = initialVisibility.losBlocked ? firstLosClear >= 0 : true;
+  const pathClearStep = firstPathClear >= 0 ? firstPathClear + 1 : null;
+  const losClearStep = firstLosClear >= 0 ? firstLosClear + 1 : null;
+
+  const startDistance = initialVisibility.distance;
+  const observedDistances = [startDistance, ...samples.map(x => x.nextFoodDistance ?? x.foodDistance)];
+  const maxDistanceIncrease = Math.max(...observedDistances) - startDistance;
+  const maxLateralExcursion = samples.length ? Math.max(...samples.map(x => Math.abs(x.y - 0.5))) : 0;
+  const endDistance = samples.at(-1)?.nextFoodDistance ?? startDistance;
+  const distanceProgress = startDistance - endDistance;
+  const successfulDetour = Boolean(reached && initialVisibility.pathBlocked && pathCleared && maxLateralExcursion >= CONFIG.world.agentRadius * 1.5);
+  const temporaryRetreat = maxDistanceIncrease >= 0.012 && awayThrustRate > 0;
+
+  return {
+    reached,
+    firstReachStep,
+    rotationTrap,
+    trapWindows,
+    totalRotations,
+    netRotations,
+    maxWindowRotations,
+    turnReversals,
+    bearingCrossings,
+    turnActionRate,
+    thrustActionRate,
+    brakeActionRate,
+    awayThrustRate,
+    pathCleared,
+    pathClearStep,
+    losCleared,
+    losClearStep,
+    maxDistanceIncrease,
+    maxLateralExcursion,
+    successfulDetour,
+    temporaryRetreat,
+    distanceProgress,
+    wallHits: env.wallHits,
+    steps: samples.length,
+  };
+}
+
 function runOcclusionTrial(model, caseName, trialIndex) {
   const seed = domainSeed(`${OCCLUSION_AUDIT.protocol}:trial`, trialIndex);
   const env = prepareAuditWorld(seed, caseName);
-  // Same stochastic-action stream for the same trial across all geometry cases.
+  // Same stochastic-action stream for the same trial across every geometry case.
   const rng = new PRNG(domainSeed(`${OCCLUSION_AUDIT.protocol}:action`, trialIndex));
   let obs = env.observe();
   let hidden = model.zeroHidden();
@@ -357,52 +561,55 @@ function runOcclusionTrial(model, caseName, trialIndex) {
     sample.rewardParts = { ...(env.lastRewardParts || {}) };
     sample.foodReached = (Number(sample.rewardParts.food) || 0) > 0;
     sample.done = result.done;
+    sample.nextLosBlocked = nextVis.losBlocked;
+    sample.nextPathBlocked = nextVis.pathBlocked;
     samples.push(sample);
     obs = result.obs;
     hidden = act.hidden;
     if (sample.foodReached) { reached = true; firstReachStep = step + 1; break; }
   }
 
-  let maxWindowRotations = 0;
-  let spin = false;
-  for (let i = 0; i < samples.length; i++) {
-    const w = samples.slice(Math.max(0, i - SPIN_TELEMETRY.spinWindowSteps + 1), i + 1);
-    if (w.length < 20) continue;
-    const rotations = rollingTurn(w) / TAU;
-    const progress = w[0].foodDistance - w.at(-1).foodDistance;
-    maxWindowRotations = Math.max(maxWindowRotations, rotations);
-    if (rotations >= SPIN_TELEMETRY.spinRotationThreshold && progress <= SPIN_TELEMETRY.poorProgressDistance) spin = true;
-  }
-  const totalRotations = rollingTurn(samples) / TAU;
-  const endDistance = samples.at(-1)?.nextFoodDistance ?? initialVisibility.distance;
   return {
     caseName,
+    caseLabel: CASE_LABELS[caseName] || caseName,
     trialIndex,
     seed,
     initialLosBlocked: initialVisibility.losBlocked,
     initialPathBlocked: initialVisibility.pathBlocked,
-    reached,
-    firstReachStep,
-    spin,
-    totalRotations,
-    maxWindowRotations,
-    distanceProgress: initialVisibility.distance - endDistance,
-    wallHits: env.wallHits,
-    steps: samples.length,
+    ...analyzeTrial(samples, initialVisibility, reached, firstReachStep, env),
   };
 }
 
 function summarizeCase(caseName, trials) {
+  const reachSteps = trials.filter(x => x.firstReachStep != null).map(x => x.firstReachStep);
+  const pathSteps = trials.filter(x => x.pathClearStep != null).map(x => x.pathClearStep);
+  const losSteps = trials.filter(x => x.losClearStep != null).map(x => x.losClearStep);
   return {
     caseName,
+    caseLabel: CASE_LABELS[caseName] || caseName,
     trials: trials.length,
     initialLosBlocked: Boolean(trials[0]?.initialLosBlocked),
     initialPathBlocked: Boolean(trials[0]?.initialPathBlocked),
     reachRate: rate(trials, x => x.reached),
-    spinRate: rate(trials, x => x.spin),
-    meanReachSteps: mean(trials.filter(x => x.firstReachStep != null).map(x => x.firstReachStep)),
+    rotationTrapRate: rate(trials, x => x.rotationTrap),
+    pathClearRate: rate(trials, x => x.pathCleared),
+    losClearRate: rate(trials, x => x.losCleared),
+    successfulDetourRate: rate(trials, x => x.successfulDetour),
+    temporaryRetreatRate: rate(trials, x => x.temporaryRetreat),
+    meanReachSteps: mean(reachSteps),
+    meanPathClearStep: mean(pathSteps),
+    meanLosClearStep: mean(losSteps),
     meanTotalRotations: mean(trials.map(x => x.totalRotations)),
+    meanNetRotations: mean(trials.map(x => x.netRotations)),
     meanMaxWindowRotations: mean(trials.map(x => x.maxWindowRotations)),
+    meanTurnReversals: mean(trials.map(x => x.turnReversals)),
+    meanBearingCrossings: mean(trials.map(x => x.bearingCrossings)),
+    meanTurnActionRate: mean(trials.map(x => x.turnActionRate)),
+    meanThrustActionRate: mean(trials.map(x => x.thrustActionRate)),
+    meanBrakeActionRate: mean(trials.map(x => x.brakeActionRate)),
+    meanAwayThrustRate: mean(trials.map(x => x.awayThrustRate)),
+    meanMaxDistanceIncrease: mean(trials.map(x => x.maxDistanceIncrease)),
+    meanMaxLateralExcursion: mean(trials.map(x => x.maxLateralExcursion)),
     meanDistanceProgress: mean(trials.map(x => x.distanceProgress)),
     meanWallHits: mean(trials.map(x => x.wallHits)),
   };

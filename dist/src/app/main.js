@@ -472,7 +472,7 @@ function stepObserved() {
   lastSnapshot = act.snapshot;
   if (capturedSpin) {
     updateSpinTelemetryUI();
-    setStatus(`Captured live spin event #${capturedSpin.id}: ${capturedSpin.cause} • LOS blocked ${(capturedSpin.blockedRate * 100).toFixed(0)}% of trigger window • ${capturedSpin.recovery}. Recorder remains read-only.`);
+    setStatus(`Captured rotation trap #${capturedSpin.id}: ${capturedSpin.cause} / ${capturedSpin.rotationMode} • LOS blocked ${(capturedSpin.blockedRate * 100).toFixed(0)}% • ${capturedSpin.recovery}. Recorder remains read-only.`);
   } else if (r.done) {
     setStatus(`Episode complete (${selectedSourceLabel()}): food ${r.info.food}, return ${r.info.totalReward.toFixed(2)}.`);
   }
@@ -980,36 +980,37 @@ function suiteText(name, r) {
   return `${name}\nprotocol: ${r.protocol}\nepisodes: ${r.episodes} (${r.episodesPerStage}/skill)\ngeneralization score: ${pct(r.balancedScore)} [${pct(r.balancedCiLow)}–${pct(r.balancedCiHigh)}]\nmean return: ${r.meanReturn.toFixed(3)}\nmean food: ${r.meanFood.toFixed(3)}\nsurvival: ${(r.survivalRate * 100).toFixed(1)}%\nmean energy: ${r.meanEnergy.toFixed(3)}\nmean steps: ${r.meanSteps.toFixed(1)}\nskills:\n${skillLines}`;
 }
 function spinEventTableHtml(events) {
-  if (!events.length) return '<div class="spinEmpty">No sustained spin event captured yet. Put MicroMind in OBSERVE and let it run normally; the recorder only watches and never feeds line-of-sight information back to the policy.</div>';
-  const rows = [...events].reverse().map(e => `<tr><td>#${e.id}</td><td>${e.seed}</td><td>${e.stageName}</td><td>${e.triggerStep}</td><td>${e.cause}</td><td>${pct(e.blockedRate)}</td><td>${pct(e.forwardConeRate)}</td><td>${e.onsetBearingDeg.toFixed(0)}°</td><td>${e.onsetOmegaFraction.toFixed(2)}</td><td>${e.triggerRotations.toFixed(2)}</td><td>${e.triggerProgress.toFixed(3)}</td><td>${e.recovery}</td></tr>`).join('');
-  return `<div class="spinTableWrap"><table class="resultsTable spinTable"><thead><tr><th>event</th><th>seed</th><th>stage</th><th>step</th><th>classified context</th><th>LOS blocked</th><th>diag front</th><th>bearing</th><th>ω/max</th><th>rotations</th><th>food Δ</th><th>recovery</th></tr></thead><tbody>${rows}</tbody></table></div>`;
+  if (!events.length) return '<div class="spinEmpty">No rotation-trap event captured yet. Put MicroMind in OBSERVE and let it run normally; the recorder only watches and never feeds line-of-sight information back to the policy.</div>';
+  const rows = [...events].reverse().map(e => `<tr><td>#${e.id}</td><td>${e.seed}</td><td>${e.stageName}</td><td>${e.triggerStep}</td><td>${e.cause}</td><td>${e.rotationMode}</td><td>${pct(e.blockedRate)}</td><td>${pct(e.pathBlockedRate)}</td><td>${e.triggerRotations.toFixed(2)}</td><td>${e.triggerReversals}</td><td>${e.triggerBearingCrossings}</td><td>${pct(e.triggerTurnActionRate)}</td><td>${pct(e.triggerThrustActionRate)}</td><td>${pct(e.triggerAwayThrustRate)}</td><td>${e.triggerProgress.toFixed(3)}</td><td>${e.recovery}</td></tr>`).join('');
+  return `<div class="spinTableWrap"><table class="resultsTable spinTable"><thead><tr><th>event</th><th>seed</th><th>stage</th><th>step</th><th>context</th><th>turn mode</th><th>LOS blocked</th><th>path blocked</th><th>turns</th><th>reversals</th><th>bearing crosses</th><th>turn%</th><th>thrust%</th><th>away-thrust%</th><th>food Δ</th><th>recovery</th></tr></thead><tbody>${rows}</tbody></table></div>`;
 }
 
 function occlusionAuditResultHtml(label, audit, meta = '') {
   const rows = audit.cases.map(row => {
     const geometry = row.initialLosBlocked ? 'LOS BLOCKED' : row.initialPathBlocked ? 'PATH BLOCKED / LOS CLEAR' : 'OPEN';
     const reachSteps = row.meanReachSteps > 0 ? row.meanReachSteps.toFixed(1) : '—';
-    return `<tr><td>${row.caseName}</td><td>${geometry}</td><td>${pct(row.reachRate)}</td><td>${pct(row.spinRate)}</td><td>${reachSteps}</td><td>${row.meanMaxWindowRotations.toFixed(2)}</td><td>${row.meanTotalRotations.toFixed(2)}</td><td>${row.meanDistanceProgress.toFixed(3)}</td><td>${row.meanWallHits.toFixed(1)}</td></tr>`;
+    const clearStep = row.meanPathClearStep > 0 ? row.meanPathClearStep.toFixed(1) : '—';
+    return `<tr><td>${row.caseLabel || row.caseName}</td><td>${geometry}</td><td>${pct(row.reachRate)}</td><td>${pct(row.pathClearRate)}</td><td>${clearStep}</td><td>${pct(row.successfulDetourRate)}</td><td>${pct(row.rotationTrapRate)}</td><td>${reachSteps}</td><td>${row.meanTotalRotations.toFixed(2)}</td><td>${row.meanTurnReversals.toFixed(1)}</td><td>${row.meanBearingCrossings.toFixed(1)}</td><td>${pct(row.meanTurnActionRate)}</td><td>${pct(row.meanThrustActionRate)}</td><td>${pct(row.meanAwayThrustRate)}</td><td>${row.meanMaxDistanceIncrease.toFixed(3)}</td><td>${row.meanWallHits.toFixed(1)}</td></tr>`;
   }).join('');
-  return `<div class="orientationResultBlock"><div class="orientationResultHead"><b>${label}</b><span>${meta}</span></div><div class="orientationBandLine">Same start pose, food position, zero recurrent state, and paired stochastic action RNG seed per trial. Only wall geometry differs.</div><div class="spinTableWrap"><table class="resultsTable spinTable"><thead><tr><th>case</th><th>geometry</th><th>reach</th><th>spin</th><th>steps→food</th><th>max rolling turns</th><th>total turns</th><th>food Δ</th><th>wall hits</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
+  return `<div class="orientationResultBlock"><div class="orientationResultHead"><b>${label}</b><span>${meta}</span></div><div class="orientationBandLine">Same start pose, food position, zero recurrent state, and paired stochastic action RNG seed per trial. Only wall geometry differs. “detour” means the run reached food after first clearing a blocked direct path with measurable lateral excursion; it is descriptive evidence, not a scripted-navigation label.</div><div class="spinTableWrap"><table class="resultsTable spinTable"><thead><tr><th>case</th><th>initial geometry</th><th>reach</th><th>path clear</th><th>steps→clear</th><th>detour</th><th>rotation trap</th><th>steps→food</th><th>total turns</th><th>reversals</th><th>bearing crosses</th><th>turn%</th><th>thrust%</th><th>away-thrust%</th><th>max retreat</th><th>wall hits</th></tr></thead><tbody>${rows}</tbody></table></div></div>`;
 }
 
 function updateSpinTelemetryUI() {
   if (!el.spinCompactSummary) return;
   const summary = liveSpinRecorder.summary();
-  const recorderState = mode === 'OBSERVE' ? (paused ? 'PAUSED' : summary.active ? 'CAPTURING EVENT' : 'ARMED') : 'STANDBY';
+  const recorderState = mode === 'OBSERVE' ? (paused ? 'PAUSED' : summary.active ? 'CAPTURING TRAP' : 'ARMED') : 'STANDBY';
   el.spinRecorderStatus.textContent = `${recorderState} • ${summary.samples.toLocaleString()} samples`;
   el.spinEventCount.textContent = `${summary.events}${summary.active ? ' + active' : ''}`;
   el.spinBlockedRate.textContent = summary.events ? `${pct(summary.blockedAtOnsetRate)} event onsets` : '—';
-  el.spinLatestCause.textContent = summary.latestCause;
-  el.spinCompactSummary.textContent = `${recorderState} • ${summary.events} captured${summary.events ? ` • blocked ${pct(summary.blockedAtOnsetRate)}` : ''}`;
+  el.spinLatestCause.textContent = summary.events ? `${summary.latestCause} / ${summary.latestMode}` : '—';
+  el.spinCompactSummary.textContent = `${recorderState} • ${summary.events} traps${summary.events ? ` • blocked ${pct(summary.blockedAtOnsetRate)}` : ''}`;
   el.spinResults.innerHTML = spinEventTableHtml(liveSpinRecorder.events);
 
   if (lastOcclusionAudit) {
-    let html = `<div class="orientationAuditIntro">Controlled paired geometry audit. OPEN has no wall. CLEARANCE keeps the food centerline visible but places a wall inside the agent's direct travel corridor. OCCLUDED crosses the food centerline itself. The LOS/path labels are diagnostics only and are never policy inputs.</div>`;
+    let html = `<div class="orientationAuditIntro">Paired failure-characterization audit. OPEN and CLEARANCE preserve the old controls; NARROW/WIDE centered blockers, mirrored LEFT/RIGHT-heavy blockers, and LONG DETOUR progressively test whether the policy can clear an obstructed direct path instead of repeatedly turning around the food vector. LOS/path labels remain diagnostics only and are never policy inputs.</div>`;
     html += occlusionAuditResultHtml(`LEARNER • ${lastOcclusionAudit.lineageId}`, lastOcclusionAudit.learner.result, `@ ${Number(lastOcclusionAudit.learner.steps).toLocaleString()} steps`);
     if (lastOcclusionAudit.champion) html += occlusionAuditResultHtml('CHAMPION BALANCED', lastOcclusionAudit.champion.result, `@ ${Number(lastOcclusionAudit.champion.steps).toLocaleString()} steps`);
-    html += `<div class="orientationAuditNote">A telemetry “spin” requires at least ${SPIN_TELEMETRY.spinRotationThreshold.toFixed(2)} rolling rotations while food-distance progress stays ≤ ${SPIN_TELEMETRY.poorProgressDistance.toFixed(3)}. It is a diagnostic event definition, not a policy failure declaration.</div>`;
+    html += `<div class="orientationAuditNote">A “rotation trap” is broader than the previous continuous-spin flag: it can trigger on ≥${SPIN_TELEMETRY.rotationTrapThreshold.toFixed(2)} rolling rotations with poor food progress, or on a smaller ≥${SPIN_TELEMETRY.oscillationRotationThreshold.toFixed(2)} turn loop when repeated direction reversals / food-bearing crossings show oscillation. It remains a diagnostic event definition, not a policy input or reward.</div>`;
     el.spinOcclusionResults.innerHTML = html;
   }
 }
@@ -1018,7 +1019,7 @@ async function runOcclusionConflictAudit() {
   paused = true;
   el.pause.textContent = 'Resume';
   el.spinOcclusionRun.disabled = true;
-  setStatus(`Running read-only occlusion conflict audit: ${OCCLUSION_AUDIT.cases.length} geometries × ${OCCLUSION_AUDIT.trialsPerCase} paired seeded trials. Training is paused.`);
+  setStatus(`Running read-only occlusion failure characterization: ${OCCLUSION_AUDIT.cases.length} geometries × ${OCCLUSION_AUDIT.trialsPerCase} paired seeded trials. Training is paused.`);
   await yieldUI();
   try {
     const learnerBefore = JSON.stringify(session.model.serialize());
@@ -1043,10 +1044,11 @@ async function runOcclusionConflictAudit() {
     lastOcclusionAudit = result;
     updateSpinTelemetryUI();
     const open = learnerResult.cases.find(x => x.caseName === 'open');
-    const blocked = learnerResult.cases.find(x => x.caseName === 'occluded');
-    setStatus(`Occlusion audit complete. Learner OPEN reach ${pct(open?.reachRate || 0)} / spin ${pct(open?.spinRate || 0)}; OCCLUDED reach ${pct(blocked?.reachRate || 0)} / spin ${pct(blocked?.spinRate || 0)}. No learning, physics, sensor, reward, checkpoint, or Champion state changed.`);
+    const narrow = learnerResult.cases.find(x => x.caseName === 'narrow-center');
+    const longDetour = learnerResult.cases.find(x => x.caseName === 'long-detour');
+    setStatus(`Occlusion characterization complete. Learner OPEN reach ${pct(open?.reachRate || 0)}; NARROW reach ${pct(narrow?.reachRate || 0)} / trap ${pct(narrow?.rotationTrapRate || 0)}; LONG DETOUR reach ${pct(longDetour?.reachRate || 0)} / trap ${pct(longDetour?.rotationTrapRate || 0)}. No learning, physics, sensor, reward, checkpoint, or Champion state changed.`);
   } catch (e) {
-    setStatus(`Occlusion audit failed safely: ${e.message}`);
+    setStatus(`Occlusion characterization failed safely: ${e.message}`);
   } finally {
     el.spinOcclusionRun.disabled = false;
   }
@@ -1369,7 +1371,7 @@ el.spinOcclusionRun?.addEventListener('click', runOcclusionConflictAudit);
 el.spinClear?.addEventListener('click', () => {
   liveSpinRecorder.reset();
   updateSpinTelemetryUI();
-  setStatus('Live spin telemetry cleared. Recorder remains read-only and will arm automatically in OBSERVE mode.');
+  setStatus('Live rotation-trap telemetry cleared. Recorder remains read-only and will arm automatically in OBSERVE mode.');
 });
 el.test.addEventListener('click', runUnseen);
 el.compare.addEventListener('click', compareBrains);

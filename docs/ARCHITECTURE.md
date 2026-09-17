@@ -1,60 +1,39 @@
-# Architecture — v0.1.4.1.2
+# Architecture — v0.1.4.1.3
 
-## Policy learner
+The production learning path is unchanged from v0.1.4.1.2. The new work remains isolated in the application/evaluation layer.
 
-`10 observations → 24 recurrent units → 7-action policy + value head`
+## Read-only geometry measurement
 
-The policy has **1,040 learned parameters** and remains on the same recurrent PPO implementation.
+`src/evaluation/occlusionSpinTelemetry.js` computes two external geometry facts for the nearest food:
 
-## Curiosity predictor
+- raw center-to-center line-of-sight intersection with walls;
+- direct travel-corridor intersection using the real agent collision radius to expand walls.
 
-`10 observations + 7-way one-hot action → 16 tanh units → 9 predicted dynamic next-observation values`
+These values are never appended to the 10-value policy observation and never affect rewards, PPO, curriculum, curiosity, or world stepping.
 
-The auxiliary forward model has **441 learned parameters**. It predicts the next sensory state and learns from real transitions. It does not choose actions directly and is never used to score evaluation performance.
+## Live rotation-trap recorder
 
-## Validation confidence layer
+Protocol: `live-occlusion-rotation-trap:v2`.
 
-Routine Champion/retention validation still uses `validation:v3` with 12 seeded-stochastic episodes per skill. Each validation checkpoint now stores the exact active policy as the next same-lineage comparison reference.
+The recorder runs only around normal **OBSERVE** stepping. It stores a bounded rolling history and detects two descriptive failure patterns:
 
-If balanced performance drops >=10 points or an individual skill drops >=15 points versus the previous checkpoint, `validation:confidence:v1` runs a larger paired replay. Current and reference policies receive identical fixed environment seeds and action-randomness streams. Paired per-episode skill-score differences are summarized with a 95% confidence interval. `CONFIRMED REGRESSION` requires both a material negative paired mean and an upper confidence bound below zero. Otherwise the suspicious raw event is `LIKELY NOISE` (or `MEASURED DROP` when no compatible reference exists yet).
+1. large cumulative angular travel with poor food-distance progress;
+2. a smaller turn loop with poor progress plus repeated turn-direction reversals or repeated food-bearing crossings.
 
-This layer is observational. It never restores weights, changes rewards, alters curriculum, or promotes a Champion.
+Captured events include action mix, temporary away-from-food thrust, LOS/path blockage, danger rays, recurrent-state summaries, angular state, target identity, and a short recovery tail. At most 12 completed events are retained in session memory.
 
+## Controlled failure characterization
 
-## Rear-target / rotation audit
+Protocol: `occlusion-failure-characterization:v2`.
 
-`orientation-audit:v1` is a manual, read-only diagnostic domain. It creates temporary empty-arena `World` instances and places one food target at fixed bearings around an agent that starts from rest. It uses the normal 10-value observation, normal stochastic policy sampling, recurrent hidden-state updates, and normal angular dynamics. No training transition is stored and no policy/optimizer/predictor/session state is updated.
+The audit creates temporary worlds with identical start pose, food position, zero recurrent state, and paired stochastic action RNG streams. Seven wall geometries are compared: OPEN, CLEARANCE, NARROW CENTER, WIDE CENTER, LEFT-HEAVY, RIGHT-HEAVY, and LONG DETOUR.
 
-The audit reports facing success, target reach, cumulative angular travel, a conservative spin-incidence threshold, BRAKE selection while angular speed is already substantial, and initial policy preference at each bearing. Because food relative X/Y is always present in the current observation, this audit specifically measures turn-control behavior rather than visual object permanence.
+Each temporary trajectory uses normal policy inference and recurrent-state evolution but stores no PPO transition and mutates no persistent learner state. Before/after model serialization checks guard both the Learner and Balanced Champion.
 
+The audit measures path clearing, time-to-clear, reach, lateral excursion, temporary retreat, cumulative/net rotation, turn reversals, bearing crossings, action mix, wall hits, and rotation-trap incidence.
 
-## Live occlusion / spin telemetry
+## Performance boundary
 
-`live-occlusion-spin:v1` lives entirely in the app/evaluation layer. During **OBSERVE** only, it samples the already-computed policy snapshot and world state around the normal `World.step()` call. It does not run during PPO training rollouts.
+The rich recorder remains confined to OBSERVE. LEARN hot-loop training is not instrumented by per-step rotation-trap analysis. Research audits run only on explicit user request while training is paused.
 
-Geometry is measured externally in two ways: raw center-to-center food line versus wall rectangles (`LOS BLOCKED`) and the same line versus walls expanded by the actual agent collision radius (`PATH BLOCKED`). A ±70° forward-cone flag is also recorded as a descriptive geometric feature. None of these values are appended to the 10-value policy observation.
-
-A bounded rolling detector looks for substantial cumulative angular travel with little reduction in food distance. Completed events retain lead-up and recovery context in memory only, capped at 12 events. Event classifications are descriptive summaries, not labels used by learning.
-
-`occlusion-conflict-audit:v1` creates temporary paired worlds with identical start pose, food placement, zero recurrent state and corresponding stochastic-action RNG seeds. OPEN, CLEARANCE and OCCLUDED differ only in wall geometry. It updates recurrent hidden state during each temporary trajectory because that is part of normal inference, but stores no PPO transition and mutates no persisted learner state.
-
-## Stability observatory
-
-PPO diagnostics remain read-only: losses, KL, clip fraction, advantage distribution, critic explained variance, gradient norms/clipping, and parameter movement. Regression events now retain the confidence-audit verdict alongside the preceding PPO window.
-
-## Data separation
-
-- training: `train:*`
-- ordinary Champion/retention validation: `validation:v3` — curiosity reward OFF
-- paired regression confirmation: `validation:confidence:v1` — curiosity reward OFF
-- historical comparison: `heldout:compare:v2` — curiosity reward OFF
-- curiosity A/B audit: `heldout:curiosity-ablation:v1` — curiosity reward OFF
-- final diagnostic: `heldout:final:v2` — curiosity reward OFF
-
-## Persistence
-
-Schema **10** adds the previous-validation policy reference and bounded validation-confidence history to schema 9. Schemas 1–10 load. Schema-9 migration starts with no invented confirmation evidence; the first same-lineage v0.1.4.1+ validation establishes a fresh paired reference. The rear-target audit and live occlusion/spin telemetry add no persistent fields, so schema remains 10.
-
-## Cognitive Observatory
-
-LIVE, PREDICT, MEMORY, HISTORY and RESEARCH remain read-only visualization surfaces. Off-screen heavy canvases sleep independently. Cognitive Flow, Prediction Echo, Attention Fields, Memory Constellation, Experience Ripples, History/Lineage and runtime-throughput diagnostics do not update policy or optimizer state.
+Save schema remains **10**.

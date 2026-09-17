@@ -1,17 +1,17 @@
-# Roadmap
+# MicroMind roadmap
 
-Current diagnostic milestone: **v0.1.4.1.2 — Live Occlusion & Spin-Cause Telemetry**.
+Current diagnostic milestone: **v0.1.4.1.3 — Occlusion Failure Characterization**.
 
-Immediate acceptance goal:
-1. preserve the current long-running Learner and Champion unchanged;
-2. run the paired OPEN / CLEARANCE / OCCLUDED controlled audit;
-3. collect several real OBSERVE-mode spin events from normal procedural worlds;
-4. determine whether event onset correlates with actual wall line-of-sight blockage, collision-corridor blockage, danger-ray conflict, off-axis target context, target switching, angular momentum, or recurrent-history context;
-5. compare the controlled and live evidence rather than treating either alone as proof;
-6. only then choose one targeted mechanism for v0.1.4.2.
+The goal of this milestone is to establish whether the loaded long-running policy has any genuine learned detour/navigation strategy when the food vector points through an obstacle, and to distinguish sustained one-way spinning from turn/reverse oscillation.
 
-The v0.1.4.1 **Validation Confidence & True Regression Audit** and v0.1.4.1.1 **Rear-Target & Rotation Audit** remain intact underneath this diagnostic build.
+## Decision gate before v0.1.4.2
 
-Next: **v0.1.4.2 — Evidence-Targeted Learning / Control Fix**. Change exactly one mechanism supported by the collected data. Do not simultaneously add rear vision, scripted memory, reward shaping, angular braking and recurrent-training changes.
+Do not change learning yet. Accept v0.1.4.1.3 only after physical testing provides:
 
-After stability is understood: **v0.1.5.0 — World Model / Imagination Foundation**, followed by controlled imagination/planning and richer memory work.
+- paired results across OPEN, CLEARANCE, NARROW/WIDE centered blockers, LEFT/RIGHT-heavy blockers, and LONG DETOUR;
+- preferably several live OBSERVE rotation-trap captures from the real procedural world;
+- confirmation that the accepted Learner/Champion save loads normally and ordinary learning behavior remains intact.
+
+Then v0.1.4.2 should make **one targeted continual-learning change** supported by the evidence. Candidate directions remain deliberately unresolved until the audit distinguishes among policy detour learning, recurrent/temporal learning, reward/curriculum exposure, or angular-control conflict.
+
+After that targeted stability/navigation work is validated, the broader roadmap can proceed toward the planned **v0.1.5.0 World Model / Imagination Foundation**.
